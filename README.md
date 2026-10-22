@@ -153,6 +153,16 @@ The Python tests use temporary data directories and fake loopback dashboard/infe
 
 The optional test-only `jsonschema==4.26.0` dependency enables full export-schema validation; CI installs it explicitly. Without it, validator cases report skips. See [contributor verification instructions](CONTRIBUTING.md#unit-tests).
 
+Those suites are synthetic. A separate [loaded-browser qualification](docs/BROWSER_QUALIFICATION.md) runs the unpacked extension in a real Chromium, in an isolated profile, and checks the consented path end to end: nothing starts by itself, explicit On starts the owned backend, consent is explicit, the chosen page is captured, a typed value never reaches the evidence or the export, a draft is prepared without a model, and explicit Off stops the backend.
+
+```bash
+npm install
+npx playwright-core install chromium
+node scripts/qualify_browser.mjs --report browser-qualification.md
+```
+
+It is the only part of the project that needs an npm dependency, and it is test-only: the extension and the backend carry no runtime dependencies.
+
 See the [1.4.0 status-window verification](docs/STATUS_WINDOW_TEST_RESULTS.md) for current test totals, loaded-Chromium observations, and remaining personal-browser checks. The [1.3.0 browser-control verification](docs/BROWSER_CONTROL_TEST_RESULTS.md) records On/Off, native-process, and shutdown-race evidence. The [1.2.0 report](docs/AUTOMATION_TEST_RESULTS.md) records earlier automation and recovery checks, and the [1.1.0 report](docs/TEST_RESULTS.md) preserves manual-workflow and local-model checks. Build an unpackable Chromium ZIP with `python3 scripts/package_extension.py`; CI also retains it as an artifact.
 
 See [ROADMAP.md](ROADMAP.md) for remaining work, [CONTRIBUTING.md](CONTRIBUTING.md) for contributing, and [SECURITY.md](SECURITY.md) for vulnerability reporting.

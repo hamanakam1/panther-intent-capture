@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A redaction parity test that runs one corpus through the extension and the backend and requires the same result, so the two implementations cannot drift apart.
 - A markup-integrity regression that keeps every extension page a single document whose element ids are unique.
 - The floating capture panel is now a named region holding a named group of actions, draws a visible focus ring, stays legible in forced-colors mode, and can be dismissed with Escape, which returns the keyboard to where it was.
+- A loaded-browser qualification that runs the unpacked extension in a real Chromium and checks the whole consented path: nothing starts by itself, explicit On starts the owned backend, consent is explicit, the chosen page is captured, a typed value never reaches the evidence or the export, a draft is prepared without a model, and explicit Off stops the backend.
 
 ### Changed
 - The panel's status line is filled after its live region is in the page, so assistive technology announces the capture state instead of only showing it.
