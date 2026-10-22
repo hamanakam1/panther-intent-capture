@@ -6,13 +6,13 @@ import { readFile } from "node:fs/promises";
 const script = await readFile(new URL("../extension/content/content.js", import.meta.url), "utf8");
 
 class Element {
-  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.attributes = {}; this.listeners = {}; this.style = {}; this.textContent = ""; this.control = true; }
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.attributes = {}; this.listeners = {}; this.style = {}; this.textContent = ""; this.isConnected = true; this.control = true; }
   setAttribute(key, value) { this.attributes[key] = value; }
   getAttribute(key) { return this.attributes[key] ?? null; }
   hasAttribute(key) { return this.attributes[key] !== undefined; }
   append(...children) { for (const child of children) { this.children.push(child); child.parent = this; } }
   appendChild(child) { this.append(child); }
-  remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); }
+  remove() { this.isConnected = false; if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); }
   attachShadow(options) { this.shadowOptions = options; this.shadow = new Element("shadow"); return this.shadow; }
   addEventListener(type, fn) { this.listeners[type] = fn; }
   // `control: false` models an element the page never marked as a control.
@@ -23,10 +23,11 @@ class Element {
     return this.control === false ? null : this;
   }
   querySelector() { return this.editableChild || null; }
+  focus(options) { this.focused = (this.focused || 0) + 1; this.focusOptions = options; }
 }
 
 function fixture() {
-  const messages = [], listeners = {}, windowListeners = {}, timers = new Map(), observers = [];
+  const messages = [], listeners = {}, windowListeners = {}, timers = new Map(), observers = [], timeouts = [];
   let nextTimer = 0, onMessage;
   let status = { ok: true, status: "recording", session: { eventCount: 0 } };
   const root = new Element("html");
@@ -43,10 +44,11 @@ function fixture() {
     performance: { timeOrigin: 1700000000000 },
     getComputedStyle: (element) => ({ cursor: element?.cursor || "" }),
     location: { href: "http://127.0.0.1:8080/#master" },
-    document: { documentElement: root, createElement: (tag) => new Element(tag), addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); } },
+    document: { documentElement: root, activeElement: null, createElement: (tag) => new Element(tag), addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); } },
     window: { addEventListener: (type, fn) => { windowListeners[type] = fn; } },
     setInterval: (fn, interval) => { timers.set(++nextTimer, { fn, interval }); return nextTimer; },
     clearInterval: (id) => timers.delete(id),
+    setTimeout: (fn) => { timeouts.push(fn); return timeouts.length; },
     chrome: { runtime: {
       onMessage: { addListener: (fn) => { onMessage = fn; } },
       sendMessage: async (message) => {
@@ -62,6 +64,7 @@ function fixture() {
     start(automationEnabled = false, diagnosticNonce = "nonce-1", captureStartMs = 0) { onMessage({ type: "extension.captureStart", sessionId: "session-1", automationEnabled, diagnosticNonce, captureStartMs }, {}, () => {}); },
     stop() { onMessage({ type: "extension.captureStop" }, {}, () => {}); },
     state(value) { status = value; },
+    flush() { for (const fn of timeouts.splice(0)) fn(); },
     dispatch(type, target, path = [target], isTrusted = true) {
       for (const listener of listeners[type] || []) listener({ target, isTrusted, composedPath: () => path });
     },
@@ -87,6 +90,7 @@ test("content installs once, stays idle until Start, and renders isolated stop/r
   assert.equal(panel.id, "panther-intent-capture-controls");
   assert.equal(panel.shadowOptions.mode, "closed");
   const box = panel.shadow.children[1];
+  f.flush();
   assert.equal(box.children[0].textContent, "Panther · Capturing");
   assert.equal(box.children[2].children[0].textContent, "Stop & generate");
 });
@@ -293,4 +297,55 @@ test("page failures stop with capture and are bounded per session", () => {
   const before = f.failures().length;
   f.emitResource({ name: "http://127.0.0.1:8080/api/after", responseStatus: 500, initiatorType: "fetch" });
   assert.equal(f.failures().length, before);
+});
+
+test("the capture panel is a named region holding a named group of actions", () => {
+  const f = fixture(); f.start();
+  const box = f.root.children[0].shadow.children[1];
+  assert.equal(box.getAttribute("role"), "region");
+  assert.equal(box.getAttribute("aria-label"), "Panther capture controls");
+  const controls = box.children[2];
+  assert.equal(controls.getAttribute("role"), "group");
+  assert.equal(controls.getAttribute("aria-label"), "Capture actions");
+});
+
+test("the status line is filled after the live region exists, so it is announced", () => {
+  const f = fixture(); f.start();
+  const status = f.root.children[0].shadow.children[1].children[0];
+  assert.equal(status.getAttribute("role"), "status");
+  assert.equal(status.getAttribute("aria-live"), "polite");
+  assert.equal(status.textContent, "");
+  f.flush();
+  assert.equal(status.textContent, "Panther · Capturing");
+});
+
+test("Escape inside the panel hides it and returns the keyboard to where it was", () => {
+  const f = fixture();
+  const before = new Element("input");
+  f.context.document.activeElement = before;
+  f.start();
+  const panel = f.root.children[0];
+  let escaped = false;
+  panel.shadow.listeners.keydown({ key: "Escape", preventDefault() { escaped = true; } });
+  assert.equal(escaped, true);
+  assert.equal(f.root.children.length, 0);
+  assert.equal(before.focused, 1);
+  assert.equal(before.focusOptions.preventScroll, true);
+  // Hiding the panel never stops the capture.
+  f.dispatch("click", new Element("button"));
+  assert.equal(f.events().length, 2);
+});
+
+test("a keypress that is not Escape leaves the panel alone", () => {
+  const f = fixture(); f.start();
+  const panel = f.root.children[0];
+  panel.shadow.listeners.keydown({ key: "Tab", preventDefault() { throw new Error("Tab must not be swallowed"); } });
+  assert.equal(f.root.children.length, 1);
+});
+
+test("the panel draws a visible focus ring and stays legible in forced colors", () => {
+  const f = fixture(); f.start();
+  const style = f.root.children[0].shadow.children[0];
+  assert.match(style.textContent, /button:focus-visible\{outline:/);
+  assert.match(style.textContent, /@media \(forced-colors: active\)/);
 });
