@@ -50,7 +50,7 @@ const drafts = id => ({mode: "observed", tickets: [{id: "draft-" + id, title: "R
 const job = (status, extras = {}) => ({status, target_url: "http://127.0.0.1:8080",
   ticket_count: 1, delivered_count: 0, attempts: 1, deliveries: [], ...extras});
 
-function fixture({initialJob = job("disabled"), initialStatus, screenshots = false, browserPower} = {}) {
+function fixture({initialJob = job("disabled"), initialStatus, screenshots = false, browserPower, confirmation = true} = {}) {
   const elements = new Map(), responses = new Map(), calls = [], timers = new Map();
   let nextTimer = 0;
   const document = {
@@ -82,7 +82,7 @@ function fixture({initialJob = job("disabled"), initialStatus, screenshots = fal
       assert.equal(message.type, "extension.getPowerState");
       return browserPower();
     }}},
-    history: {replaceState() {}}, confirm: () => true,
+    history: {replaceState() {}}, confirm: () => confirmation,
     setTimeout(callback) { const id = ++nextTimer; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); },
     async fetch(url, options) {
@@ -301,4 +301,124 @@ test("becoming hidden invalidates in-flight polling without scheduling backgroun
   stale.resolve(job("delivered", {delivered_count: 1})); await flush();
   assert.doesNotMatch(f.get("automationStatus").textContent, /Automatic delivery finished/);
   assert.equal(f.timers.size, 0);
+});
+
+
+test("capture inbox filters literal title, page and goal without hiding a selected review", async () => {
+  const f = fixture(); await f.ready;
+  f.get("captureSearch").value = "CAPTURE B"; f.get("captureSearch").listeners.input();
+  assert.equal(f.get("recordings").children.length, 1);
+  assert.match(f.get("recordings").textContent, /Capture b/);
+  assert.equal(f.get("captureTitle").textContent, "Capture a");
+  f.get("captureSearch").value = "not present"; f.get("captureSearch").listeners.input();
+  assert.equal(f.get("recordings").children.length, 0);
+  assert.equal(f.get("libraryEmpty").hidden, false);
+  assert.match(f.get("libraryEmpty").textContent, /No captures match/);
+});
+
+test("Companion export blocks unsaved wording and exports only after saved edits", async () => {
+  const f = fixture(); await f.ready;
+  const title = f.fields()[0]; title.value = "The reviewed outcome"; title.listeners.input();
+  assert.equal(f.get("unsavedNotice").hidden, false);
+  await f.get("exportCompanion").click();
+  assert.equal(f.calls.filter(call => call.path === "export/a").length, 0);
+  assert.equal(f.get("exportCompanion").disabled, true);
+  assert.equal(f.get("export").disabled, true);
+  f.respond("POST", "tickets/a/review", () => ({ok: true}));
+  await f.draftButton("Save draft edits").click();
+  assert.equal(f.get("unsavedNotice").hidden, true);
+  f.respond("GET", "export/a", () => ({schema_version: "1.2", tickets: []}));
+  await f.get("exportCompanion").click();
+  assert.equal(f.calls.filter(call => call.path === "export/a").length, 1);
+  assert.match(f.get("message").textContent, /No data was sent automatically/);
+  assert.equal(f.calls.filter(call => call.path.includes("submit")).length, 0);
+});
+
+test("an edit made while Save is pending remains unsaved and cannot export", async () => {
+  const f = fixture(); await f.ready;
+  const title = f.fields()[0], pending = deferred();
+  title.value = "First revision"; title.listeners.input();
+  f.respond("POST", "tickets/a/review", () => pending.promise);
+  const save = f.draftButton("Save draft edits").click(); await flush();
+  title.value = "Newer revision"; title.listeners.input();
+  pending.resolve({ok: true}); await save;
+  assert.equal(f.get("unsavedNotice").hidden, false);
+  await f.get("export").click();
+  assert.equal(f.calls.filter(call => call.path === "export/a").length, 0);
+});
+
+test("declining to leave unsaved edits preserves the selected capture and fields", async () => {
+  const f = fixture({confirmation: false}); await f.ready;
+  const title = f.fields()[0]; title.value = "Unsaved outcome"; title.listeners.input();
+  await f.open("b");
+  assert.equal(f.get("captureTitle").textContent, "Capture a");
+  assert.equal(f.fields()[0].value, "Unsaved outcome");
+});
+
+test("late preview cannot open for a capture the user has left", async () => {
+  const f = fixture(); await f.ready;
+  const pending = deferred();
+  f.respond("POST", "tickets/a/review", () => ({ok: true}));
+  f.respond("POST", "integrations/ticket-service/preview/a", () => pending.promise);
+  const preview = f.draftButton("Preview ticket delivery").click(); await flush();
+  await f.open("b");
+  pending.resolve({payload: {title: "Old capture"}, payload_hash: "old"}); await preview;
+  assert.equal(f.get("previewDialog").open, false);
+  await f.get("confirmSend").click();
+  assert.equal(f.calls.filter(call => call.path.includes("submit")).length, 0);
+});
+
+
+test("edits made while export is pending require a fresh saved export", async () => {
+  const f = fixture(); await f.ready;
+  const pending = deferred(); f.respond("GET", "export/a", () => pending.promise);
+  const exporting = f.get("exportCompanion").click(); await flush();
+  const title = f.fields()[0]; title.value = "New wording"; title.listeners.input();
+  pending.resolve({schema_version: "1.2", tickets: []}); await exporting;
+  assert.match(f.get("message").textContent, /changed while the export/);
+  assert.doesNotMatch(f.get("message").textContent, /Bundle exported/);
+});
+
+test("editing during a pending preview does not offer an outdated payload for confirmation", async () => {
+  const f = fixture(); await f.ready;
+  const pending = deferred();
+  f.respond("POST", "tickets/a/review", () => ({ok: true}));
+  f.respond("POST", "integrations/ticket-service/preview/a", () => pending.promise);
+  const preview = f.draftButton("Preview ticket delivery").click(); await flush();
+  const title = f.fields()[0]; title.value = "New wording"; title.listeners.input();
+  pending.resolve({payload: {title: "Old wording"}, payload_hash: "old"}); await preview;
+  assert.notEqual(f.get("previewDialog").open, true);
+  assert.match(f.get("message").textContent, /changed while its preview/);
+});
+
+
+test("an entirely unconfigured destination list has an explicit disabled placeholder", async () => {
+  const f = fixture();
+  f.respond("GET", "integrations", () => ({destinations: [{kind: "ticket-service", label: "Local service", configured: false}, {kind: "github", label: "GitHub", configured: false}]}));
+  await f.ready;
+  assert.equal(f.get("deliveryDestination").value, "");
+  assert.equal(f.get("deliveryDestination").disabled, true);
+  assert.equal(f.get("deliveryDestination").children[0].textContent, "No destination configured");
+});
+
+test("review: export must reject an edit that was saved while export was pending", async () => {
+ const f=fixture(); await f.ready;
+ const pending=deferred(); f.respond("GET","export/a",()=>pending.promise);
+ const exporting=f.get("exportCompanion").click(); await flush();
+ const title=f.fields()[0];title.value="New saved wording";title.listeners.input();
+ f.respond("POST","tickets/a/review",()=>({ok:true}));
+ await f.draftButton("Save draft edits").click();
+ pending.resolve({schema_version:"1.2",tickets:[{title:"OLD WORDING"}]}); await exporting;
+ assert.doesNotMatch(f.get("message").textContent,/Bundle exported/);
+});
+test("review: previous view save must not clear unsaved edits after reopening same capture", async () => {
+ const f=fixture();await f.ready;
+ const pending=deferred();f.respond("POST","tickets/a/review",()=>pending.promise);
+ f.fields()[0].value="Old view wording";f.fields()[0].listeners.input();
+ const saving=f.draftButton("Save draft edits").click();await flush();
+ await f.open("b");await f.open("a");
+ f.fields()[0].value="New view unsaved wording";f.fields()[0].listeners.input();
+ pending.resolve({ok:true});await saving;
+ assert.equal(f.get("unsavedNotice").hidden,false);
+ assert.equal(f.get("exportCompanion").disabled,true);
 });

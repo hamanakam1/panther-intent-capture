@@ -8,7 +8,7 @@
 </head>
 <body>
 <main class="shell">
-  <header class="header"><h1>Panther</h1><div class="status" id="status" role="status">Checking…</div></header>
+  <header class="header"><div><p class="product-label">INTENT CAPTURE</p><h1>Panther</h1></div><div class="status" id="status" role="status">Checking…</div></header>
   <section class="card power-card" aria-label="Panther runtime">
     <div class="power-heading"><strong id="powerStatus" role="status" aria-live="polite">Panther is off</strong></div>
     <div class="power-actions">
@@ -24,7 +24,22 @@
     <details class="helper-setup"><summary>Browser helper setup</summary><p class="note">Extension ID: <code id="extensionId"></code></p><a id="setupLink" href="https://github.com/hamanakam1/panther-intent-capture/blob/main/docs/BROWSER_CONTROL.md" target="_blank" rel="noopener noreferrer">Setup instructions</a></details>
   </section>
   <div id="backendBanner" class="banner warn" hidden>Local backend is unavailable. Capture stays in this browser until upload succeeds.</div>
+  <section class="card consent-card">
+    <h2 class="section-title">1. Choose what to capture</h2>
+    <div class="consent-row"><input type="checkbox" id="consent"><label for="consent">Allow capture of the tab I choose</label></div>
+    <p class="note">While Panther is on, separately consent and Start to capture clicks, navigation, and control metadata. Typed values and keys are excluded. Turning on never starts capture.</p>
+    <label for="goal" class="field-label">What should improve?</label>
+    <textarea id="goal" rows="3" maxlength="1000" placeholder="For example: make the dashboard filter remember my choice"></textarea>
+    <div class="consent-row"><input type="checkbox" id="screenshots"><label for="screenshots">Include up to 5 screenshots this session</label></div>
+    <p class="note">Screenshots may contain private information; pixels are not redacted. Video and audio are unavailable in this release.</p>
+    <div class="consent-row"><input type="checkbox" id="automation"><label for="automation">Automatically deliver tickets this session</label></div>
+    <div class="consent-row"><label for="automationDestination">Destination</label><select id="automationDestination"></select></div>
+    <p id="automationTarget" class="note">Checking the configured delivery destination…</p>
+    <div class="consent-row"><input type="checkbox" id="automationAI" disabled><label for="automationAI">Use local AI to propose tickets this session</label></div>
+    <p class="note">Stop &amp; deliver creates up to 5 review-only backlog tickets at the displayed destination. Summaries, not screenshot pixels, are delivered. Panther does not execute the work. Local AI is optional; otherwise tickets use observed events only. Consent expires 24 hours after Start. Already delivered or in-flight tickets cannot be undone by cancellation.</p>
+  </section>
   <section class="card control-card">
+    <h2 class="section-title">2. Capture, then review</h2>
     <button id="recordBtn" class="btn" disabled>Start capture</button>
     <button id="stopBtn" class="btn danger" hidden>Stop &amp; generate drafts</button>
     <button id="retryBtn" class="btn" hidden>Retry upload</button>
@@ -38,19 +53,6 @@
     <p id="capturePowerHelp" class="note">Stop saves or delivers this session and leaves Panther on. Turn Panther off stops capture, cancels remaining automatic delivery, and preserves unsaved events.</p>
     <div id="warning" class="banner warn" role="status" hidden></div>
     <div id="error" class="error" role="alert" hidden></div>
-  </section>
-  <section class="card consent-card">
-    <div class="consent-row"><input type="checkbox" id="consent"><label for="consent">Allow capture of the tab I choose</label></div>
-    <p class="note">While Panther is on, separately consent and Start to capture clicks, navigation, and control metadata. Typed values and keys are excluded. Turning on never starts capture.</p>
-    <label for="goal" class="field-label">What should improve?</label>
-    <textarea id="goal" rows="3" maxlength="1000" placeholder="For example: make the dashboard filter remember my choice"></textarea>
-    <div class="consent-row"><input type="checkbox" id="screenshots"><label for="screenshots">Include up to 5 screenshots this session</label></div>
-    <p class="note">Screenshots may contain private information; pixels are not redacted. Video and audio are unavailable in this release.</p>
-    <div class="consent-row"><input type="checkbox" id="automation"><label for="automation">Automatically deliver tickets this session</label></div>
-    <div class="consent-row"><label for="automationDestination">Destination</label><select id="automationDestination"></select></div>
-    <p id="automationTarget" class="note">Checking the configured delivery destination…</p>
-    <div class="consent-row"><input type="checkbox" id="automationAI" disabled><label for="automationAI">Use local AI to propose tickets this session</label></div>
-    <p class="note">Stop &amp; deliver creates up to 5 review-only backlog tickets at the displayed destination. Summaries, not screenshot pixels, are delivered. Panther does not execute the work. Local AI is optional; otherwise tickets use observed events only. Consent expires 24 hours after Start. Already delivered or in-flight tickets cannot be undone by cancellation.</p>
   </section>
   <section class="card log-card"><h3>Activity &amp; consent</h3><div id="log"></div></section>
   <footer class="footer"><a href="../options/options.html" target="_blank">All recordings &amp; drafts</a> · Chrome / Edge 116+</footer>

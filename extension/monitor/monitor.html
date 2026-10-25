@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Panther status</title>
+  <title>Panther · Intent Capture</title>
   <link rel="stylesheet" href="monitor.css">
 </head>
 <body>
   <header class="power-panel" aria-label="Panther runtime controls">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">P</span><span>Panther <span class="brand-subtitle">/ status</span></span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">P</span><span>Panther <span class="brand-subtitle">/ intent capture</span></span><span class="local-badge">ON YOUR DEVICE</span></div>
     <div class="power-heading"><span id="powerDot" class="power-dot" aria-hidden="true"></span><h1 id="powerStatus" aria-live="polite">Checking Panther…</h1></div>
     <div class="power-actions">
       <button id="turnOnBtn" class="button primary" hidden>Turn Panther on</button>
@@ -17,19 +17,20 @@
     <p id="runtimeHelp" class="small">Waiting for a confirmed runtime status.</p>
   </header>
   <main>
-    <section class="consent-card" aria-label="Capture consent and settings">
-      <div class="section-heading"><h2>Capture Consent & Settings</h2></div>
-      <div class="consent-row"><input type="checkbox" id="consent"><label for="consent">Allow capture of the tab I choose</label></div>
-      <p class="small">While Panther is on, separately consent and Start to capture clicks, navigation, and control metadata. Typed values and keys are excluded.</p>
-      <label for="goal" class="field-label">What should improve?</label>
-      <textarea id="goal" rows="3" maxlength="1000" placeholder="For example: make the dashboard filter remember my choice"></textarea>
-      <div class="consent-row"><input type="checkbox" id="screenshots"><label for="screenshots">Include up to 5 screenshots this session</label></div>
-      <p class="small">Screenshots may contain private information; pixels are not redacted.</p>
-      <div class="consent-row"><input type="checkbox" id="automation"><label for="automation">Automatically deliver tickets this session</label></div>
-      <p id="automationTarget" class="small">Checking the configured dashboard destination…</p>
-      <div class="consent-row"><input type="checkbox" id="automationAI" disabled><label for="automationAI">Use local AI to propose tickets this session</label></div>
-      <p class="small">Stop &amp; deliver creates up to 5 review-only backlog tickets. Consent expires 24 hours after Start.</p>
+    <section class="next-card" aria-label="Your next step">
+      <p class="eyebrow">YOUR NEXT STEP</p>
+      <h2 id="nextTitle">Checking the connection</h2>
+      <p id="nextDetail">Waiting for a confirmed extension state.</p>
+      <ol class="workflow" aria-label="Capture workflow"><li id="stepCapture">01 · Capture</li><li id="stepReview">02 · Review</li><li id="stepHandoff">03 · Handoff</li></ol>
     </section>
+    <section class="session-actions" aria-label="Session controls">
+      <button id="stopBtn" class="button secondary" hidden>Stop &amp; generate drafts</button>
+      <button id="cancelBtn" class="button outline" hidden>Cancel remaining delivery</button>
+      <button id="reviewBtn" class="button secondary" hidden>Review saved result</button>
+      <p id="captureHelp" class="small">Capture starts from Panther’s toolbar on the webpage you choose. Consent and Start are always explicit.</p>
+      <p class="small">Stop saves this session and leaves Panther on. Off cancels remaining work; an already submitted request may still finish.</p>
+    </section>
+
     <section class="activity-card" aria-label="Current activity">
       <div class="section-heading"><h2>Current activity</h2><span id="activity" class="activity-label" role="status">Unknown</span></div>
       <p id="activityDetail">Checking the extension. This window does not start capture.</p>
@@ -57,56 +58,11 @@
         <div id="liveAiResult" class="ai-result" hidden><span id="liveAiProvenance" class="source-label"></span><p id="liveAiSummary"></p><p id="liveAiIntent" class="small"></p><p id="liveAiIssue" class="small" hidden></p><p id="liveAiEvidence" class="small"></p></div>
       </div>
     </section>
-    <section class="actions-card" aria-label="Recent captured activity">
-      <div class="section-heading"><h2>Recent activity</h2><span class="source-label">Observed events</span></div>
-      <p id="recentEmpty" class="small">Nothing captured yet. Turning Panther on does not start recording.</p>
-      <ol id="recentActions" class="recent-actions" aria-label="Latest captured actions"></ol>
-      <p id="eventCoverage" class="small" hidden></p>
-    </section>
     <section class="evidence-card" aria-label="Captured evidence and results">
       <h2 id="countsHeading">Retained information</h2>
       <dl class="counts"><div><dt>Events</dt><dd id="eventCount">0</dd></div><div><dt>Screenshots</dt><dd id="screenshotCount">0</dd></div></dl>
       <p id="historyNote" class="small" hidden>Retained information is historical, not current activity.</p>
-      <div id="resultSummary" class="result-summary" hidden>
-        <p id="draftSummary"></p>
-        <p id="receiptSummary" class="small" hidden></p>
-        <p id="receiptTime" class="small" hidden></p>
-      </div>
-    </section>
-    <section class="session-actions" aria-label="Session controls">
-      <button id="startBtn" class="button primary">Start capture</button>
-      <button id="stopBtn" class="button secondary" hidden>Stop &amp; generate drafts</button>
-      <button id="cancelBtn" class="button outline" hidden>Cancel remaining delivery</button>
-      <button id="reviewBtn" class="button secondary" hidden>Review saved result</button>
-      <p id="captureHelp" class="small">To start capture, choose a webpage and ensure consent is enabled. Consent and Start are always explicit.</p>
-      <p class="small">Stop saves this session and leaves Panther on. Off cancels remaining work; an already submitted request may still finish.</p>
-    </section>
-    <footer>
-      <p>Closing this window does not turn Panther off. It is a normal browser window, not an always-on-top overlay.</p>
-      <p>Intent → reviewable tickets. Never work execution.</p>
-    </footer>
-  </main>
-  <script type="module" src="monitor.js"></script>
-</body>
-</html>
-    <section class="understanding-card" aria-label="Live understanding">
-      <div class="section-heading"><h2>What Panther is noticing</h2><span id="understandingMode" class="source-label">Not capturing</span></div>
-      <p id="understandingSummary" class="understanding-summary">Panther is not capturing. Choose a webpage and start a consented capture from the toolbar.</p>
-      <p id="inferredIntent" class="inferred-intent"></p>
-      <p id="observationFreshness" class="freshness">No captured activity yet.</p>
-      <details id="intentContext" class="intent-context" hidden>
-        <summary>Capture context</summary>
-        <p id="observedPage" class="small"></p>
-        <p id="statedGoal" class="small"></p>
-      </details>
-      <div id="frictionSection" class="friction-section" hidden><h3>Possible friction · not a finding</h3><ul id="frictionList" class="friction-list"></ul></div>
-      <div class="live-ai-controls">
-        <label class="checkbox-label"><input id="liveAiToggle" type="checkbox" disabled><span>Live local AI insights</span></label>
-        <p class="small">Local-only analysis of sanitized activity and goal. Off by default.</p>
-        <details class="ai-consent-details"><summary>What enabling insights allows</summary><p class="small">Only this capture’s sanitized activity and stated goal go to your local model. No screenshots, cloud fallback or work execution. Disabling stops new requests; an already-running local request may finish. Closing or hiding this window also disables insights.</p></details>
-        <p id="liveAiStatus" class="small" role="status">Start a capture to enable local AI insights.</p>
-        <div id="liveAiResult" class="ai-result" hidden><span id="liveAiProvenance" class="source-label"></span><p id="liveAiSummary"></p><p id="liveAiIntent" class="small"></p><p id="liveAiIssue" class="small" hidden></p><p id="liveAiEvidence" class="small"></p></div>
-      </div>
+      <div id="resultSummary" class="result-summary" hidden><p id="draftSummary"></p><p id="receiptSummary" class="small" hidden></p><p id="receiptTime" class="small" hidden></p></div>
     </section>
     <section class="actions-card" aria-label="Recent captured activity">
       <div class="section-heading"><h2>Recent activity</h2><span class="source-label">Observed events</span></div>
@@ -114,22 +70,12 @@
       <ol id="recentActions" class="recent-actions" aria-label="Latest captured actions"></ol>
       <p id="eventCoverage" class="small" hidden></p>
     </section>
-    <section class="evidence-card" aria-label="Captured evidence and results">
-      <h2 id="countsHeading">Retained information</h2>
-      <dl class="counts"><div><dt>Events</dt><dd id="eventCount">0</dd></div><div><dt>Screenshots</dt><dd id="screenshotCount">0</dd></div></dl>
-      <p id="historyNote" class="small" hidden>Retained information is historical, not current activity.</p>
-      <div id="resultSummary" class="result-summary" hidden>
-        <p id="draftSummary"></p>
-        <p id="receiptSummary" class="small" hidden></p>
-        <p id="receiptTime" class="small" hidden></p>
-      </div>
-    </section>
-    <section class="session-actions" aria-label="Session controls">
-      <button id="stopBtn" class="button secondary" hidden>Stop &amp; generate drafts</button>
-      <button id="cancelBtn" class="button outline" hidden>Cancel remaining delivery</button>
-      <button id="reviewBtn" class="button secondary" hidden>Review saved result</button>
-      <p id="captureHelp" class="small">To start capture, choose a webpage and open Panther from that browser’s toolbar. Consent and Start are always explicit.</p>
-      <p class="small">Stop saves this session and leaves Panther on. Off cancels remaining work; an already submitted request may still finish.</p>
+    <section class="handoff-card" aria-label="Continue with Companion">
+      <p class="eyebrow">CONNECTED, WHEN YOU CHOOSE</p>
+      <h2>Turn evidence into a useful next action.</h2>
+      <p class="small">Review your saved drafts, then choose <strong>Export for Companion</strong>. Import that file in Companion to explain the evidence against your goal. Each app also works on its own.</p>
+      <a class="companion-link" href="http://127.0.0.1:8765" target="_blank" rel="noopener noreferrer">Open local Companion <span aria-hidden="true">↗</span></a>
+      <p class="small">Companion must be running locally. Opening it shares no capture data.</p>
     </section>
     <footer>
       <p>Closing this window does not turn Panther off. It is a normal browser window, not an always-on-top overlay.</p>

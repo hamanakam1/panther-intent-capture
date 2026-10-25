@@ -1,6 +1,6 @@
-import { monitorView, liveView } from "./status-model.js";
+import { monitorView, liveView, nextStepView } from "./status-model.js";
 
-const elements = Object.fromEntries(["powerStatus", "powerDot", "turnOnBtn", "turnOffBtn", "runtimeHelp", "activity", "activityDetail", "operationStatus", "connectionStatus", "error", "warning", "countsHeading", "eventCount", "screenshotCount", "historyNote", "resultSummary", "draftSummary", "receiptSummary", "receiptTime", "stopBtn", "cancelBtn", "reviewBtn", "understandingMode", "understandingSummary", "observationFreshness", "intentContext", "observedPage", "statedGoal", "inferredIntent", "frictionSection", "frictionList", "recentEmpty", "recentActions", "eventCoverage", "liveAiToggle", "liveAiStatus", "liveAiResult", "liveAiProvenance", "liveAiSummary", "liveAiIntent", "liveAiIssue", "liveAiEvidence"].map(id => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(["nextTitle", "nextDetail", "stepCapture", "stepReview", "stepHandoff", "powerStatus", "powerDot", "turnOnBtn", "turnOffBtn", "runtimeHelp", "activity", "activityDetail", "operationStatus", "connectionStatus", "error", "warning", "countsHeading", "eventCount", "screenshotCount", "historyNote", "resultSummary", "draftSummary", "receiptSummary", "receiptTime", "stopBtn", "cancelBtn", "reviewBtn", "understandingMode", "understandingSummary", "observationFreshness", "intentContext", "observedPage", "statedGoal", "inferredIntent", "frictionSection", "frictionList", "recentEmpty", "recentActions", "eventCoverage", "liveAiToggle", "liveAiStatus", "liveAiResult", "liveAiProvenance", "liveAiSummary", "liveAiIntent", "liveAiIssue", "liveAiEvidence"].map(id => [id, document.getElementById(id)]));
 const POLL_MS = 500;
 const STATUS_TIMEOUT_MS = 6000;
 let snapshot = {};
@@ -136,6 +136,10 @@ async function maybeAnalyze() {
 
 function render() {
   const state = view();
+  const next = nextStepView(state);
+  elements.nextTitle.textContent = next.title;
+  elements.nextDetail.textContent = next.detail;
+  for (const [id, stage] of [["stepCapture", "capture"], ["stepReview", "review"], ["stepHandoff", "handoff"]]) elements[id].dataset.current = String(next.stage === stage);
   elements.powerStatus.textContent = state.title;
   elements.powerDot.dataset.state = state.power;
   elements.runtimeHelp.textContent = state.runtimeHelp;

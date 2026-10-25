@@ -68,6 +68,10 @@ The three API calls behind it — the health check, the capture, and the listing
 
 Video capture, audio capture, and media playback are disabled in this release. Legacy media files in the repository are not a supported capture path. Firefox and Safari manifests are experimental placeholders, not supported browser builds.
 
+## Working beside Panther Companion
+
+Use the status window as a readable capture rail, then use the searchable review desk to check events and page-reported failures, edit expected outcomes, and export a portable intent bundle. **Export for Companion** prepares the existing schema `1.2` file for explicit import in Companion; it sends nothing automatically. Both tools remain useful on their own. See [the Companion workspace guide](docs/COMPANION_WORKSPACE.md) for the capture → review → next-action workflow and a practical ultrawide layout.
+
 ## Quick start
 
 You need Python 3.11+, macOS or Linux, and Chrome or Edge 116+ for browser-controlled operation. The core backend uses Python's standard library; no package installation or Ollama service is needed for evidence drafts. There is no login service to enable and no terminal to keep running after helper setup.

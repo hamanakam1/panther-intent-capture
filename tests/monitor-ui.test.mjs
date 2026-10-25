@@ -381,3 +381,30 @@ test("pending Stop disables AI opt-in while Off stays independent", async () => 
   assert.equal(f.elements.understandingMode.textContent, "Historical · rules");
   assert.equal(f.elements.recentActions.children.length, 2);
 });
+
+
+test("monitor has exactly one document, module, and unique controls", () => {
+  for (const tag of ["html", "head", "body"]) {
+    assert.equal((html.match(new RegExp(`<${tag}(?:\\s|>)`, "gi")) || []).length, 1, `one ${tag} document`);
+    assert.equal((html.match(new RegExp(`</${tag}>`, "gi")) || []).length, 1, `one closing ${tag}`);
+  }
+  const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(new Set(ids).size, ids.length, "IDs must be unique in the real markup");
+  assert.equal((html.match(/<script\b/g) || []).length, 1);
+  assert.doesNotMatch(html, /id="(?:consent|goal|startBtn|screenshots|automation|automationAI)"/, "no unwired capture controls in a status-only surface");
+  assert.match(html, /http:\/\/127\.0\.0\.1:8765/);
+});
+
+test("next step follows confirmed state and stale state never suggests active recording", async () => {
+  const f = fixture(idle("off")); await flush();
+  assert.match(f.elements.nextTitle.textContent, /clear intention/);
+  assert.equal(f.elements.stepCapture.dataset.current, "true");
+  f.setState(observed()); await f.advance(1000);
+  assert.match(f.elements.nextTitle.textContent, /workflow/);
+  f.respond("extension.getStatus", () => {throw new Error("lost connection");}); await f.advance(1000);
+  assert.match(f.elements.nextTitle.textContent, /connection/);
+  assert.equal(f.elements.stepCapture.dataset.current, "false");
+  f.clearResponse("extension.getStatus"); f.setState({...idle("on"), status: "ready", result: {id: "saved", ticketCount: 1}}); await f.advance(1000);
+  assert.equal(f.elements.stepHandoff.dataset.current, "true");
+  assert.match(f.elements.nextDetail.textContent, /Companion/);
+});
