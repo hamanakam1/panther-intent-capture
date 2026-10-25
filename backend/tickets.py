@@ -1,6 +1,7 @@
 """Create reviewable drafts from observed events or explicitly requested local AI."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -473,13 +474,22 @@ def _preserve_reviewed(previous: Optional[Dict[str, Any]], generated: Dict[str, 
         reviewed = previous_ticket.get("reviewed")
         if not isinstance(reviewed, dict):
             continue
-        for field in REVIEWED_FIELDS:
-            if field in reviewed:
-                ticket[field] = reviewed[field]
+        retained = {field: copy.deepcopy(reviewed[field]) for field in REVIEWED_FIELDS if field in reviewed}
+        ticket.update(retained)
+        # Preserve the decision as well as its visible fields, so a second
+        # regeneration still knows which values belong to the reviewer.
+        if retained:
+            ticket["reviewed"] = copy.deepcopy(retained)
     return generated
 
 
-def save_tickets(recording_id: str, data: Dict[str, Any]) -> str:
+def save_tickets(recording_id: str, data: Dict[str, Any], *, preserve_reviewed: bool = True) -> str:
+    """Persist a generated result or an explicit validated review.
+
+    Generation keeps earlier human decisions. The review endpoint supplies
+    preserve_reviewed=False because its latest validated edits replace those
+    decisions; reapplying the old values here would silently undo the save.
+    """
     recording_id = storage._safe_id(recording_id)
     if not isinstance(data, dict) or not isinstance(data.get("tickets"), list):
         raise ValueError("Draft result must contain a tickets array")
@@ -493,7 +503,9 @@ def save_tickets(recording_id: str, data: Dict[str, Any]) -> str:
         modes = dict(existing.get("modes", {})) if existing else {}
         if existing and existing.get("data", {}).get("mode") in ("observed", "ai"):
             modes[existing["data"]["mode"]] = existing["data"]
-        modes[mode] = _preserve_reviewed(modes.get(mode), data)
+        if preserve_reviewed:
+            data = _preserve_reviewed(modes.get(mode), data)
+        modes[mode] = data
         ticket_id = f"drafts-{recording_id}"
         payload = {"id": ticket_id, "recording_id": recording_id, "created_at": time.time(), "data": data, "modes": modes}
         storage.write_json(storage.ROOT / "tickets" / f"{recording_id}.json", payload)

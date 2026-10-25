@@ -473,7 +473,7 @@ def handle_request(handler: BaseHTTPRequestHandler):
                 ticket = _reviewed_ticket(entry, data)
                 saved = load_tickets(rid)
                 saved["data"]["tickets"] = [ticket if t["id"] == ticket["id"] else t for t in saved["data"]["tickets"]]
-                save_tickets(rid, saved["data"])
+                save_tickets(rid, saved["data"], preserve_reviewed=False)
             _json(handler, 200, {"saved": True, "ticket": ticket})
             return
         if parts[0] == "tickets" and len(parts) == 2 and method in ("GET", "POST"):
