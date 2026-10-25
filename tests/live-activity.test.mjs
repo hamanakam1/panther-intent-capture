@@ -40,6 +40,19 @@ test("a page-reported failure never carries a control identity or raw page text"
   assert.doesNotMatch(JSON.stringify(out), /page text/);
 });
 
+test("a click on an element that is not a control is a hypothesis, not a confirmed defect", () => {
+  const out = buildLiveActivity(session([
+    event("click", 1000, { tag: "button", id: "save", label: "Save" }),
+    { type: "click", ts: 1200, url: origin, target: { tag: "div", id: "tile", inert: true } }
+  ]));
+  const pattern = out.patterns.find((item) => item.kind === "non_control_click");
+  assert.ok(pattern);
+  assert.deepEqual(pattern.evidence, [2]);
+  assert.equal(pattern.hypothesis, true);
+  assert.match(pattern.detail, /never marked as a control/);
+  assert.match(pattern.detail, /No failure is verified/);
+});
+
 test("absent or non-consented captures expose no activity", () => {
   for (const value of [null, undefined, {}, false, "capture", session([], { consent: false }), session([], { consent: "true" })]) assert.equal(buildLiveActivity(value), null);
 });

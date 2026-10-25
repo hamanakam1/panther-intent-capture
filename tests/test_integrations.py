@@ -105,7 +105,7 @@ class IntegrationsTests(unittest.TestCase):
 
     def test_generic_export_is_portable_and_does_not_contact_dashboard(self):
         result = integrations.export_bundle(self.recording, {"data": {"tickets": [self.ticket]}})
-        self.assertEqual(result["schema_version"], "1.1")
+        self.assertEqual(result["schema_version"], "1.2")
         self.assertEqual(result["tickets"][0]["acceptance_criteria"], ["The edited text is retained"])
         self.assertFalse(result["authority"]["execution_authorized"])
         self.assertTrue(result["tickets"][0]["requires_review"])
@@ -184,6 +184,7 @@ class IntegrationsTests(unittest.TestCase):
         self.assertEqual(receipts[0].stat().st_mode & 0o777, 0o600)
 
     def test_destination_change_rejects_previous_confirmation_before_network(self):
+        import destinations
         from api import routes
         preview = integrations.preview_ticket(self.recording, self.ticket)
         body = json.dumps({"ticket_id": self.ticket["id"], "confirmed": True,
@@ -210,7 +211,7 @@ class IntegrationsTests(unittest.TestCase):
         with patch.dict(os.environ, {"PANTHER_DASHBOARD_URL": "http://127.0.0.1:1"}), \
                 patch.object(storage, "get_recording", return_value=self.recording), \
                 patch.object(routes, "_reviewed_ticket", return_value=self.ticket), \
-                patch.object(routes, "submit_ticket") as submit, \
+                patch.object(destinations, "submit") as submit, \
                 patch.object(integrations, "_request") as network:
             changed = integrations.preview_ticket(self.recording, self.ticket)
             self.assertNotEqual(changed["payload_hash"], preview["payload_hash"])

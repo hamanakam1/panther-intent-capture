@@ -31,10 +31,50 @@
     } catch { return ""; }
   }
 
+  // Controls Panther recognises, and the wider set it still describes.
+  const CONTROLS = "button,a,input,select,textarea,[role=button],[role=tab],[data-tab],[data-ticket]";
+  const SEMANTIC = CONTROLS + ",form";
+
+  /**
+   * Does an element present itself as interactive?
+   *
+   * A click that lands on something the page never marked as a control is
+   * worth recording when the element still looks interactive to the person:
+   * it declares a role, it is focusable, or it is styled as a pointer. An
+   * ordinary click on empty space is not evidence of anything and is left
+   * out.
+   */
+  function presentsAsInteractive(element) {
+    if (!element || typeof element.getAttribute !== "function") return false;
+    try {
+      if (element.getAttribute("role")) return true;
+      if (typeof element.hasAttribute === "function" && element.hasAttribute("tabindex")) return true;
+      if (typeof getComputedStyle === "function") return getComputedStyle(element).cursor === "pointer";
+    } catch { /* A detached or replaced element cannot be inspected. */ }
+    return false;
+  }
+
   function send(type, target = null) {
     if (!sessionId) return;
-    const semantic = target?.closest?.("button,a,input,select,textarea,form,[role=button],[role=tab],[data-tab],[data-ticket]");
-    if (target && !semantic) return;
+    const control = target?.closest?.(CONTROLS);
+    const semantic = control || target?.closest?.("form");
+    if (target && !semantic) {
+      // The click landed on something that is not a control. Record it only
+      // when the element presents itself as interactive.
+      if (type === "click" && presentsAsInteractive(target)) {
+        const element = target;
+        chrome.runtime.sendMessage({ type: "page.interaction", sessionId, payload: {
+          type: "click", ts: Date.now(), url: safeUrl(location.href),
+          target: {
+            tag: String(element.tagName || "").toLowerCase().slice(0, 40),
+            role: element.getAttribute("role") || "",
+            id: element.id || "",
+            inert: true
+          }
+        } }).catch(() => { /* The background may have gone away; the page keeps working. */ });
+      }
+      return;
+    }
     const payload = { type, ts: Date.now(), url: safeUrl(location.href) };
     if (semantic) {
       const tag = semantic.tagName.toLowerCase();
@@ -49,6 +89,8 @@
         dataTab: semantic.getAttribute("data-tab") || "",
         dataTicket: semantic.getAttribute("data-ticket") || ""
       };
+      // The click landed on something the page never marked as a control.
+      if (!control && type === "click" && presentsAsInteractive(target)) payload.target.inert = true;
     }
     chrome.runtime.sendMessage({ type: "page.interaction", sessionId, payload }).then((reply) => {
       if (!reply?.ok) {

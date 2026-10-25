@@ -64,6 +64,8 @@ function fixture({initialJob = job("disabled"), initialStatus, screenshots = fal
   if (screenshots) recordings[0].screenshot_count = 1;
   respond("GET", "health", () => ({status: "ok"}));
   respond("GET", "recordings", () => ({recordings}));
+  respond("GET", "integrations", () => ({destinations: [{ kind: "ticket-service", label: "Local ticket service",
+    available: true, configured: true, state: "reachable", url: "http://127.0.0.1:8080", error: "" }]}));
   respond("GET", "integrations/ticket-service", () => ({ok: true}));
   for (const recording of recordings) {
     respond("GET", "recordings/" + recording.id, () => recording);
@@ -110,7 +112,8 @@ function fixture({initialJob = job("disabled"), initialStatus, screenshots = fal
 
 test("unconfigured delivery stays visible without disabling local draft review", async () => {
   const f = fixture();
-  f.respond("GET", "integrations/ticket-service", () => ({ok: false, state: "unconfigured", url: ""}));
+  f.respond("GET", "integrations", () => ({destinations: [{ kind: "ticket-service", label: "Local ticket service",
+    available: false, configured: false, state: "unconfigured", url: "", error: "not configured" }]}));
   await f.ready;
   assert.match(f.get("dashboardStatus").textContent, /not configured/);
   assert.match(f.get("dashboardStatus").textContent, /JSON export still work/);

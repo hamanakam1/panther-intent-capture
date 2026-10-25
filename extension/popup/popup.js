@@ -1,12 +1,14 @@
 import { BACKEND_ORIGIN } from "../shared/constants.js";
 import { loadConsentLog } from "../shared/audit.js";
 
-const elements = Object.fromEntries(["status", "powerStatus", "powerHelp", "powerError", "monitorBtn", "monitorError", "setupNeeded", "extensionId", "turnOnBtn", "turnOffBtn", "consent", "goal", "screenshots", "automation", "automationAI", "automationTarget", "recordBtn", "stopBtn", "retryBtn", "generateBtn", "refreshAutomationBtn", "retryAutomationBtn", "cancelAutomationBtn", "reviewBtn", "discardBtn", "meta", "warning", "error", "log", "backendBanner"].map((id) => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(["status", "powerStatus", "powerHelp", "powerError", "monitorBtn", "monitorError", "setupNeeded", "extensionId", "turnOnBtn", "turnOffBtn", "consent", "goal", "screenshots", "automation", "automationAI", "automationTarget", "automationDestination", "recordBtn", "stopBtn", "retryBtn", "generateBtn", "refreshAutomationBtn", "retryAutomationBtn", "cancelAutomationBtn", "reviewBtn", "discardBtn", "meta", "warning", "error", "log", "backendBanner"].map((id) => [id, document.getElementById(id)]));
 let current = { status: "idle", enabled: false, power: {state: "off", error: ""} };
 let busy = false;
 let operationError = "";
 let pendingConsent = null;
 let automationTarget = "";
+let automationKind = "";
+let destinationList = [];
 let targetError = "";
 let pendingPower = null;
 let powerEpoch = 0;
@@ -60,14 +62,42 @@ function syncConnections() {
   checkBackend(version);
   chrome.runtime.sendMessage({type: "extension.getAutomationTarget"}).then(response => {
     if (version !== connectionVersion || !isOn()) return;
-    if (!response?.ok || !response.url) throw new Error(response?.error || "Dashboard destination is unknown.");
-    automationTarget = response.url;
+    if (!response?.ok || !Array.isArray(response.destinations)) throw new Error(response?.error || "Delivery destinations are unknown.");
+    renderDestinations(response.destinations);
     render(current);
   }).catch(error => {
     if (version !== connectionVersion || !isOn()) return;
     targetError = `Automatic delivery unavailable: ${error.message}`;
     render(current);
   });
+}
+
+/**
+ * Show every delivery destination and let one be chosen explicitly.
+ *
+ * A destination that is not configured is still listed so the reason is
+ * visible, but it cannot be selected. The chosen destination and its
+ * canonical target are frozen for the session once consent is given.
+ */
+function renderDestinations(list) {
+  const previous = elements.automationDestination.value;
+  destinationList = list;
+  elements.automationDestination.replaceChildren(...list.map((destination) => {
+    const option = document.createElement("option");
+    option.value = destination.kind;
+    option.textContent = destination.available ? `${destination.label} — ${destination.url}`
+      : destination.configured ? `${destination.label} — ${destination.url} (not reachable right now)`
+        : `${destination.label} — not configured`;
+    option.disabled = !destination.configured;
+    return option;
+  }));
+  const usable = list.filter((destination) => destination.configured);
+  const chosen = usable.find((destination) => destination.kind === previous) || usable[0];
+  elements.automationDestination.value = chosen ? chosen.kind : "";
+  elements.automationDestination.hidden = list.length < 2;
+  automationTarget = chosen ? chosen.url : "";
+  automationKind = chosen ? chosen.kind : "";
+  targetError = chosen ? "" : "No delivery destination is configured. Manual capture and JSON export still work.";
 }
 
 function showError(message = "") {
@@ -109,7 +139,8 @@ function render(state) {
   elements.automation.disabled = !on || !!state.session || busy || working || deliveryActive || !automationTarget;
   elements.automationAI.disabled = !on || !elements.automation.checked || !!state.session || busy || working || deliveryActive;
   const displayedTarget = state.session?.automation?.target_url || (deliveryActive ? state.result.automationPolicy.target_url : automationTarget);
-  elements.automationTarget.textContent = displayedTarget ? `Destination: ${displayedTarget}${state.session || deliveryActive ? " · fixed for this session" : ""}${on ? "" : " · historical; Panther is not on"}` : !on ? "Turn Panther on to check the destination. No backend request is made while off." : targetError || "Automatic delivery unavailable: destination is unknown. Manual capture still works.";
+  const displayedKind = state.session?.automation?.target_kind || (deliveryActive ? state.result.automationPolicy.target_kind : automationKind);
+  elements.automationTarget.textContent = displayedTarget ? `Destination: ${displayedTarget}${displayedKind ? ` (${displayedKind})` : ""}${state.session || deliveryActive ? " · fixed for this session" : ""}${on ? "" : " · historical; Panther is not on"}` : !on ? "Turn Panther on to check the destination. No backend request is made while off." : targetError || "Automatic delivery unavailable: destination is unknown. Manual capture still works.";
   elements.recordBtn.hidden = !!state.session || working || deliveryActive;
   elements.recordBtn.disabled = !on || !state.enabled || busy || working || deliveryActive || (elements.automation.checked && !automationTarget);
   elements.stopBtn.hidden = !recording;
@@ -233,6 +264,12 @@ elements.automation.addEventListener("change", () => {
   if (!elements.automation.checked) elements.automationAI.checked = false;
   render(current);
 });
+elements.automationDestination.addEventListener("change", () => {
+  const chosen = destinationList.find((destination) => destination.kind === elements.automationDestination.value);
+  automationKind = chosen?.kind || "";
+  automationTarget = chosen?.configured ? chosen.url : "";
+  render(current);
+});
 elements.recordBtn.addEventListener("click", async () => {
   const epoch = powerEpoch;
   if (!isOn()) return;
@@ -240,7 +277,7 @@ elements.recordBtn.addEventListener("click", async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (epoch !== powerEpoch || !isOn()) return;
     if (!tab?.id) throw new Error("Choose a webpage to capture.");
-    const automation = elements.automation.checked ? { enabled: true, consent: true, target_url: automationTarget, use_ai: elements.automationAI.checked, max_tickets: 5 } : undefined;
+    const automation = elements.automation.checked ? { enabled: true, consent: true, target_kind: automationKind, target_url: automationTarget, use_ai: elements.automationAI.checked, max_tickets: 5 } : undefined;
     await command("extension.startRecording", { tabId: tab.id, consent: elements.consent.checked, screenshots: elements.screenshots.checked, goal: elements.goal.value, automation });
   } catch (error) { showError(error.message); }
 });

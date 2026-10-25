@@ -218,16 +218,32 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
     return !result.cancelRequested && !result.error && TERMINAL_AUTOMATION_STATES.has(result.automation?.status);
   }
 
-  async function automationTarget() {
-    const response = await request(`${BACKEND_ORIGIN}/api/extension/integrations/ticket-service`, { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`Dashboard configuration returned HTTP ${response.status}.`);
+  /**
+   * Discover the delivery destinations the backend offers.
+   *
+   * A destination is only usable when the backend confirms it is configured
+   * and reachable. The kind and the canonical target are both returned, and
+   * the target is frozen for the session once consent is given.
+   */
+  async function automationTargets() {
+    const response = await request(`${BACKEND_ORIGIN}/api/extension/integrations`, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`Destination discovery returned HTTP ${response.status}.`);
     const body = await response.json();
-    if (!body.url) throw new Error("Configure a local ticket destination before enabling automatic delivery.");
+    if (!Array.isArray(body?.destinations)) throw new Error("The backend did not return a destination list.");
+    return body.destinations;
+  }
+
+  async function automationTarget(kind) {
+    const response = await request(`${BACKEND_ORIGIN}/api/extension/integrations/${encodeURIComponent(kind)}`, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`Destination configuration returned HTTP ${response.status}.`);
+    const body = await response.json();
+    if (!body.url) throw new Error("Configure a delivery destination before enabling automatic delivery.");
     // Reachability may be false while the configured canonical destination is known.
     const url = new URL(body.url);
-    if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== "/" ||
-        !(/^(127(?:\.\d{1,3}){3}|localhost|\[::1\])$/.test(url.hostname))) throw new Error("A known loopback dashboard destination is required.");
-    return { ok: true, url: body.url };
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname === "") {
+      throw new Error("The configured destination is not a usable origin.");
+    }
+    return { ok: true, url: body.url, kind };
   }
 
   async function ensureAlarm() {
@@ -244,7 +260,9 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
 
   function acceptAutomation(body, result) {
     if (body?.ok !== true || body.recording_id !== result.id || !AUTOMATION_STATES.has(body.status) ||
-        body.target_url !== result.automationPolicy.target_url || body.use_ai !== result.automationPolicy.use_ai ||
+        body.target_url !== result.automationPolicy.target_url ||
+        body.target_kind !== result.automationPolicy.target_kind ||
+        body.use_ai !== result.automationPolicy.use_ai ||
         body.max_tickets !== result.automationPolicy.max_tickets ||
         body.execution_authorized !== false || body.expires_at !== result.consentExpiresAt / 1000 ||
         !Number.isInteger(body.ticket_count) || !Number.isInteger(body.delivered_count) ||
@@ -439,9 +457,11 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       if (message.automation.consent !== true || typeof message.automation.use_ai !== "boolean" || message.automation.max_tickets !== 5) {
         throw new Error("Automatic delivery requires fresh consent, a model choice, and the five-ticket limit.");
       }
-      const target = await automationTarget();
-      if (message.automation.target_url !== target.url) throw new Error("The dashboard destination changed or is unknown. Refresh the popup and consent to the displayed destination again.");
-      automation = { enabled: true, consent: true, target_url: target.url, use_ai: message.automation.use_ai, max_tickets: 5 };
+      const kind = typeof message.automation.target_kind === "string" ? message.automation.target_kind : "";
+      if (!kind) throw new Error("Choose a delivery destination before enabling automatic delivery.");
+      const target = await automationTarget(kind);
+      if (message.automation.target_url !== target.url) throw new Error("The delivery destination changed or is unknown. Refresh the popup and consent to the displayed destination again.");
+      automation = { enabled: true, consent: true, target_kind: kind, target_url: target.url, use_ai: message.automation.use_ai, max_tickets: 5 };
     }
     const session = {
       sessionId: crypto.randomUUID(), status: "recording", consent: true,
@@ -680,7 +700,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       case "extension.getStatus": return status(trustedMonitorControl(api, sender));
       case "extension.analyzeLive": return analyzeLive(message);
       case "extension.cancelLiveAnalysis": return { ok: true, cancelled: typeof message.sessionId === "string" && !!message.sessionId && cancelLiveAnalysis(message.sessionId) };
-      case "extension.getAutomationTarget": return automationTarget();
+      case "extension.getAutomationTarget": return { ok: true, destinations: await automationTargets() };
       case "extension.startRecording": return start(message);
       case "extension.stopRecording": return stop();
       case "extension.openReview": return openReview();

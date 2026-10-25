@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 import storage
 import automation
 import integrations
+import destinations
 from api import routes
 from server import Handler
 from tickets import DraftGenerationError
@@ -96,7 +97,7 @@ class HttpTests(unittest.TestCase):
         code, exported, _ = self.request(f"/api/extension/export/{rid}")
         self.assertEqual(exported["tickets"][0]["title"], "Preserve selected tab")
         self.assertFalse(exported["authority"]["execution_authorized"])
-        with patch.object(routes, "submit_ticket") as submit, patch.dict("os.environ", {"PANTHER_DASHBOARD_URL": "http://127.0.0.1:8080"}):
+        with patch.object(destinations, "submit") as submit, patch.dict("os.environ", {"PANTHER_DASHBOARD_URL": "http://127.0.0.1:8080"}):
             code, preview, _ = self.request(f"/api/extension/integrations/ticket-service/preview/{rid}", body)
             self.assertEqual(code, 200, preview)
             self.assertIn("no-auto", preview["payload"]["tags"])
@@ -138,6 +139,37 @@ class HttpTests(unittest.TestCase):
         self.assertIn("Page-reported failures", draft["description"])
         self.assertNotIn("secret", json.dumps(draft))
 
+    def test_the_replay_plan_describes_the_path_and_never_authorizes_execution(self):
+        rid = self.record()
+        code, plan, _ = self.request(f"/api/extension/recordings/{rid}/replay")
+        self.assertEqual(code, 200, plan)
+        self.assertEqual(plan["schema_version"], "1.0")
+        self.assertEqual(plan["authority"], {"export_only": True, "requires_review": True, "execution_authorized": False})
+        self.assertFalse(plan["limits"]["values_captured"])
+        self.assertFalse(plan["limits"]["executed_by_producer"])
+        self.assertNotIn("secret", json.dumps(plan))
+        code, script, _ = self.request(f"/api/extension/recordings/{rid}/replay?format=playwright")
+        self.assertEqual(code, 200)
+        self.assertIn(b"Panther never runs it", script)
+        self.assertNotIn(b"secret", script)
+
+    def test_the_destination_catalogue_lists_every_destination(self):
+        code, catalogue, _ = self.request("/api/extension/integrations")
+        self.assertEqual(code, 200, catalogue)
+        kinds = [entry["kind"] for entry in catalogue["destinations"]]
+        self.assertIn("ticket-service", kinds)
+        self.assertIn("github", kinds)
+        for entry in catalogue["destinations"]:
+            self.assertIn("configured", entry)
+            self.assertNotIn("token", json.dumps(entry).lower())
+
+    def test_an_unknown_destination_is_refused_before_any_request(self):
+        code, _, _ = self.request("/api/extension/integrations/not-a-destination")
+        self.assertEqual(code, 404)
+        rid = self.record()
+        code, _, _ = self.request(f"/api/extension/integrations/not-a-destination/preview/{rid}", {"ticket_id": "x"})
+        self.assertEqual(code, 404)
+
     def test_parallel_uploads_share_one_receipt(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             results = list(pool.map(lambda _: self.request("/api/extension/record", self.capture), range(4)))
@@ -151,7 +183,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(health["status"], "ok")
         self.assertIn("diagnostics", health["capabilities"])
         self.assertEqual(health["bundle_schema_version"], integrations.SCHEMA_VERSION)
-        self.assertEqual(health["schema_version"], health["bundle_schema_version"])
+        self.assertRegex(health["schema_version"], r"^\d+\.\d+$")
 
     def test_consent_and_malformed_inputs_are_rejected(self):
         for changes in ({"consent": False}, {"events": {}}, {"sessionId": ""}, {"startTime": -1},

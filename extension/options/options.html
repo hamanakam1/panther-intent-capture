@@ -7,7 +7,7 @@
 <header><div><p class="eyebrow">PANTHER INTENT CAPTURE</p><h1>From activity to a clear next step.</h1></div><button id="refresh">Refresh</button></header>
 <section class="status-bar" aria-label="System status">
 <div><span class="dot" id="backendDot"></span><strong id="backendStatus">Connecting to local backend…</strong></div>
-<div id="dashboardStatus">Checking ticket-service configuration…</div>
+<div><label for="deliveryDestination" class="muted">Delivery destination</label> <select id="deliveryDestination"></select> <span id="dashboardStatus">Checking ticket-service configuration…</span></div>
 </section>
 <p id="message" role="status" aria-live="polite">Loading captures…</p>
 <div class="workspace">
@@ -23,7 +23,7 @@
 <div class="actions"><button id="retryAutomation">Retry now</button><button id="cancelAutomation" class="danger">Cancel remaining delivery</button></div>
 <p class="muted">Session-authorized, unreviewed proposals. Delivery does not authorize execution. Cancellation cannot undo a request already in flight or remove tickets already delivered.</p>
 </section>
-<div class="actions"><button id="generate">Generate evidence draft</button><button id="generateAI">Generate with local AI</button><button id="export">Export JSON</button></div>
+<div class="actions"><button id="generate">Generate evidence draft</button><button id="generateAI">Generate with local AI</button><button id="export">Export JSON</button><button id="exportReplay">Export replay plan</button><button id="exportReplayScript">Export replay script</button></div>
 <p id="generationStatus" role="status" aria-live="polite"></p>
 <details><summary>Observed interactions</summary><ol id="events"></ol></details>
 <details id="diagnosticsPanel" hidden><summary>Page-reported failures</summary><p id="diagnosticNotice" class="muted"></p><ul id="diagnostics"></ul></details>

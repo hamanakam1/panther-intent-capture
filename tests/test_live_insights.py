@@ -19,6 +19,7 @@ import automation
 import inference
 import live_insights
 import storage
+import destinations
 from api import routes
 from server import Handler
 
@@ -313,7 +314,7 @@ class LiveInsightHttpTests(unittest.TestCase):
             return response.status, json.loads(response.read()), response.headers
 
     def test_success_is_no_store_and_does_not_persist_or_dispatch(self):
-        with patch.object(storage, "write_json") as write, patch.object(routes, "submit_ticket") as submit, \
+        with patch.object(storage, "write_json") as write, patch.object(destinations, "submit") as submit, \
              patch.object(automation, "enqueue") as enqueue:
             code, result, headers = self.request(headers={"Origin": "chrome-extension://syntheticextension"})
         self.assertEqual(code, 200, result)

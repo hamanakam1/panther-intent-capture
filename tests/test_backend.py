@@ -386,8 +386,9 @@ class DiagnosticsTests(unittest.TestCase):
     def test_a_model_proposal_receives_the_failures_but_keeps_them_separate(self):
         captured = {}
 
-        def fake_decompose(frames, events_summary, goal="", failures_summary=""):
+        def fake_decompose(frames, events_summary, goal="", failures_summary="", friction_summary=""):
             captured["failures"] = failures_summary
+            captured["friction"] = friction_summary
             captured["events"] = events_summary
             return json.dumps([{"title": "Save fails", "description": "Unverified model claim",
                                 "event_indices": [1, 2]}])
@@ -430,6 +431,67 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertNotIn("user@example.test", clean["diagnostic"]["message"])
         self.assertNotIn("secret", clean["diagnostic"]["source"])
         self.assertEqual(clean["diagnostic"]["status"], 500)
+
+
+class FrictionTests(unittest.TestCase):
+    """Possible-friction hypotheses are possibilities, and they reach the ticket."""
+
+    recording = {"id": "friction-recording", "start_time": 1000, "url": "http://localhost:8080/page",
+                 "goal": "Fix the Save button", "title": "Dashboard", "video_path": ""}
+
+    def clicks(self, count, tag="button", control_id="save", start=1000, step=200):
+        return [{"type": "click", "ts": start + index * step,
+                 "url": "http://localhost:8080/page",
+                 "target": {"tag": tag, "id": control_id, "label": "Save"}}
+                for index in range(count)]
+
+    def test_repeated_clicks_on_one_control_are_a_hypothesis(self):
+        result = tickets.generate_drafts(self.recording, self.clicks(4))
+        friction = result["tickets"][0]["friction"]
+        repeated = [item for item in friction if item["kind"] == "repeated_clicks"]
+        self.assertEqual(len(repeated), 1)
+        self.assertTrue(repeated[0]["hypothesis"])
+        self.assertEqual(repeated[0]["event_indices"], [1, 2, 3, 4])
+        self.assertIn("No failure is verified", repeated[0]["detail"])
+        self.assertIn("Possible friction", result["tickets"][0]["description"])
+        self.assertIn("possible friction signal(s)", result["tickets"][0]["evidence"])
+
+    def test_two_clicks_are_not_friction_and_different_controls_do_not_merge(self):
+        self.assertEqual(tickets._friction(self.clicks(2)), [])
+        separate = self.clicks(2, control_id="save") + self.clicks(2, control_id="cancel", start=5000)
+        self.assertEqual(tickets._friction(separate), [])
+
+    def test_clicks_outside_the_window_are_not_repeated_clicks(self):
+        spread = [{"type": "click", "ts": 1000 + index * 20000,
+                    "url": "http://localhost:8080/page",
+                    "target": {"tag": "button", "id": "save"}} for index in range(4)]
+        self.assertEqual(tickets._friction(spread), [])
+
+    def test_a_click_on_a_non_control_is_reported(self):
+        events = [{"type": "click", "ts": 1000, "url": "http://localhost:8080/page",
+                   "target": {"tag": "div", "id": "tile", "inert": True}}]
+        friction = tickets._friction(events)
+        self.assertEqual(len(friction), 1)
+        self.assertEqual(friction[0]["kind"], "non_control_click")
+        self.assertEqual(friction[0]["event_indices"], [1])
+        self.assertTrue(friction[0]["hypothesis"])
+        self.assertIn("No failure is verified", friction[0]["detail"])
+
+    def test_a_control_without_a_distinguishing_identifier_is_never_merged(self):
+        events = [{"type": "click", "ts": 1000 + index * 200, "url": "http://localhost:8080/page",
+                   "target": {"tag": "button", "label": "Save"}} for index in range(4)]
+        self.assertEqual(tickets._friction(events), [])
+
+    def test_friction_is_bounded_and_ordered(self):
+        events = []
+        for index in range(20):
+            events.append({"type": "click", "ts": 1000 + index * 100,
+                           "url": "http://localhost:8080/page",
+                           "target": {"tag": "button", "id": f"control-{index}"}})
+        friction = tickets._friction(events)
+        self.assertLessEqual(len(friction), tickets.MAX_FRICTION)
+        self.assertEqual([item["event_indices"][0] for item in friction],
+                         sorted(item["event_indices"][0] for item in friction))
 
 
 class PrivacyTests(unittest.TestCase):

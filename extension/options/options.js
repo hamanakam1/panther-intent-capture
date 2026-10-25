@@ -14,6 +14,7 @@ let automation = null;
 let automationStale = false;
 let automationTimer = null;
 let renderedDraftCount = 0;
+let deliveryKind = "";
 let automationRequest = 0;
 let automationControlBusy = false;
 const busyButtons = new WeakSet();
@@ -36,9 +37,13 @@ async function api(path, body, method = body === undefined ? "GET" : "POST") {
     ...(body === undefined ? {} : {body: JSON.stringify(body)}),
     signal: AbortSignal.timeout(path.startsWith("tickets/") ? 125000 : 30000)
   });
-  const result = await response.json();
+  const contentType = (response.headers && typeof response.headers.get === "function" ? response.headers.get("Content-Type") : "") || "";
+  // Without a declared content type the response is JSON, which is what every
+  // route but the plain-text script export returns.
+  const isJson = !contentType || contentType.includes("application/json");
+  const result = isJson ? await response.json() : await response.text();
   if (!response.ok) {
-    const error = new Error(result.error || result.message || result.state || "Request failed");
+    const error = new Error(typeof result === "string" ? result : result.error || result.message || result.state || "Request failed");
     error.status = response.status; throw error;
   }
   return result;
@@ -176,11 +181,32 @@ async function refresh() {
     message(error.message + " — start backend/start.sh, then refresh.", true);
   }
   try {
-    const status = await api("integrations/ticket-service");
-    $("dashboardStatus").textContent = status.state === "unconfigured"
-      ? "Ticket delivery is not configured · capture and JSON export still work"
-      : status.ok ? "Ticket service reachable · delivery verified when sent" : "Ticket service unavailable · JSON export still works";
-  } catch (_) { $("dashboardStatus").textContent = "Ticket service status unavailable"; }
+    const catalogue = await api("integrations");
+    renderDestinations(catalogue.destinations || []);
+  } catch (_) { $("dashboardStatus").textContent = "Delivery destination status unavailable"; }
+}
+
+/** Show every delivery destination and let one be chosen for manual delivery. */
+function renderDestinations(list) {
+  const previous = $("deliveryDestination").value;
+  $("deliveryDestination").replaceChildren(...list.map((destination) => {
+    const option = document.createElement("option");
+    option.value = destination.kind;
+    option.textContent = destination.available ? destination.label
+      : destination.configured ? `${destination.label} (not reachable right now)` : `${destination.label} (not configured)`;
+    option.disabled = !destination.configured;
+    return option;
+  }));
+  const usable = list.filter((destination) => destination.configured);
+  const chosen = usable.find((destination) => destination.kind === previous) || usable[0];
+  $("deliveryDestination").value = chosen ? chosen.kind : "";
+  $("deliveryDestination").hidden = list.length < 2;
+  deliveryKind = chosen ? chosen.kind : "";
+  const selected = list.find((destination) => destination.kind === deliveryKind);
+  $("dashboardStatus").textContent = !selected ? "Delivery destination not configured · capture and JSON export still work"
+    : selected.available ? `${selected.label} reachable · delivery verified when sent`
+      : selected.configured ? `${selected.label} configured but not reachable · JSON export still works`
+        : `${selected.label} is not configured · capture and JSON export still work`;
 }
 function renderLibrary() {
   $("count").textContent = recordings.length;
@@ -289,6 +315,10 @@ function renderTickets(data, recordingId = selected.id) {
       card.append(element("p", "Page-reported failures (observations, not verified defects): "
         + ticket.diagnostics.map(failureLine).join("; "), "muted"));
     }
+    if ((ticket.friction || []).length) {
+      card.append(element("p", "Possible friction (hypotheses, not confirmed defects): "
+        + ticket.friction.map(finding => finding.title).join("; "), "muted"));
+    }
     card.append(element("p", ticket.evidence || "", "muted"));
     const actions = element("div", "", "actions");
     const patch = () => ({title: fields.title.value.trim(), description: fields.description.value.trim(), acceptance_criteria: fields.acceptance_criteria.value.split("\n").map(x => x.trim()).filter(Boolean)});
@@ -299,7 +329,7 @@ function renderTickets(data, recordingId = selected.id) {
     actions.append(button("Preview ticket delivery", async () => {
       const body = {ticket_id: ticket.id, patch: patch()};
       await api("tickets/" + recordingId + "/review", body);
-      const preview = await api("integrations/ticket-service/preview/" + recordingId, body);
+      const preview = await api("integrations/" + encodeURIComponent(deliveryKind) + "/preview/" + recordingId, body);
       activePreview = {id: recordingId, body, preview};
       const summary = $("previewSummary");
       summary.replaceChildren(element("h3", preview.payload.title), element("p", body.patch.description));
@@ -340,7 +370,7 @@ $("confirmSend").addEventListener("click", async () => {
   $("deliveryStatus").textContent = "Sending and verifying the dashboard ticket…";
   try {
     const {id, body, preview} = activePreview;
-    const result = await api("integrations/ticket-service/submit/" + id, {...body, confirmed: true, payload_hash: preview.payload_hash});
+    const result = await api("integrations/" + encodeURIComponent(deliveryKind) + "/submit/" + id, {...body, confirmed: true, payload_hash: preview.payload_hash});
     if (result.verified) {
       const verifiedAt = result.receipt?.verified_at;
       const when = Number.isFinite(verifiedAt) ? new Date(verifiedAt * 1000).toLocaleString() : "the recorded delivery time";
@@ -364,6 +394,27 @@ $("deleteCapture").addEventListener("click", async () => {
     await api("recordings/" + selected.id, undefined, "DELETE");
     ++requestVersion; clearTimeout(automationTimer); selected = null; automation = null;
     $("captureView").hidden = true; $("emptyReview").hidden = false; await refresh();
+  } catch (error) { message(error.message, true); }
+});
+function download(name, content, type) {
+  const blob = new Blob([content], {type});
+  const url = URL.createObjectURL(blob); const link = document.createElement("a");
+  link.href = url; link.download = name; link.click(); URL.revokeObjectURL(url);
+}
+$("exportReplay").addEventListener("click", async () => {
+  if (!selected) return;
+  try {
+    const plan = await api("recordings/" + selected.id + "/replay");
+    download("panther-replay-" + selected.id + ".json", JSON.stringify(plan, null, 2), "application/json");
+    message("Replay plan exported. It describes the recorded path only; no typed value was ever captured.");
+  } catch (error) { message(error.message, true); }
+});
+$("exportReplayScript").addEventListener("click", async () => {
+  if (!selected) return;
+  try {
+    const plan = await api("recordings/" + selected.id + "/replay?format=playwright");
+    download("panther-replay-" + selected.id + ".py", plan, "text/plain");
+    message("Replay script exported. It is a proposal to review; Panther never runs it.");
   } catch (error) { message(error.message, true); }
 });
 $("export").addEventListener("click", async () => {

@@ -64,7 +64,7 @@ test("all manifests are valid and Chromium permissions are scoped to an invoked 
   for (const variant of ["", ".chrome", ".firefox", ".safari"]) {
     const manifest = JSON.parse(await readFile(new URL(`../extension/manifest${variant}.json`, import.meta.url)));
     assert.deepEqual(manifest.permissions, ["storage", "activeTab", "scripting", "alarms", ...(!variant || variant === ".chrome" ? ["nativeMessaging"] : [])]);
-    assert.equal(manifest.version, "1.6.0");
+    assert.equal(manifest.version, "1.7.0");
     assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1:7890/*"]);
     assert.equal(manifest.content_scripts, undefined);
     assert.equal(manifest.offscreen, undefined);
@@ -297,7 +297,7 @@ test("monitor stop cannot replay a retained capture after Off and On", async () 
 
 test("monitor can withdraw automatic delivery from an active capture without creating or delivering tickets", async () => {
   const f = fixture({ fetch: async () => ({ ok: true, json: async () => ({ url: "http://127.0.0.1:8080" }) }) });
-  await f.start({ automation: { enabled: true, consent: true, target_url: "http://127.0.0.1:8080", max_tickets: 5, use_ai: false } });
+  await f.start({ automation: { enabled: true, consent: true, target_kind: "ticket-service", target_url: "http://127.0.0.1:8080", max_tickets: 5, use_ai: false } });
   const sender = { ...control, url: `chrome-extension://${control.id}/monitor/monitor.html` };
   const state = await f.send("extension.cancelAutomation", {}, sender);
   assert.equal(state.session.automationWithdrawn, true);
@@ -533,13 +533,14 @@ test("discard requires a stopped session and deletes only its local capture", as
   assert.equal(f.data[SETTINGS_KEY].enabled, true);
 });
 
-const automaticPolicy = { enabled: true, consent: true, target_url: "http://127.0.0.1:8080", use_ai: false, max_tickets: 5 };
+const automaticPolicy = { enabled: true, consent: true, target_kind: "ticket-service", target_url: "http://127.0.0.1:8080", use_ai: false, max_tickets: 5 };
 
 function automaticFixture() {
   const transport = { failUpload: false, failStatus: false, target: automaticPolicy.target_url, state: "queued", count: 0, delivered: 0, tombstone: false };
   let policy, savedId, expiresAt;
   const f = fixture({ fetch: async (url, init = {}) => {
     if (url.endsWith("/integrations/ticket-service")) return { ok: true, json: async () => ({ ok: false, url: transport.target }) };
+    if (url.endsWith("/integrations")) return { ok: true, json: async () => ({ destinations: [{ kind: "ticket-service", label: "Local ticket service", available: false, configured: true, state: "unavailable", url: transport.target, error: "" }] }) };
     if (url.endsWith("/record")) {
       const payload = JSON.parse(init.body);
       savedId = f.data[SESSION_KEY].recordingId;
@@ -558,7 +559,7 @@ function automaticFixture() {
       return { ok: true, json: async () => ({ ok: true, recording_id: id, status: transport.state, stage: "generation", ticket_count: transport.count,
         delivered_count: transport.delivered, attempts: 1, next_retry_at: null, error: transport.state === "blocked" ? "Safety check blocked delivery" : "",
         deliveries: transport.delivered ? [{ ticket_id: "draft-1", state: "delivered", verified: true, ticket_url: "http://127.0.0.1:8080/?ticket=fixture" }] : [],
-        target_url: policy.target_url, use_ai: policy.use_ai, max_tickets: policy.max_tickets, expires_at: expiresAt, execution_authorized: false }) };
+        target_url: policy.target_url, target_kind: policy.target_kind, use_ai: policy.use_ai, max_tickets: policy.max_tickets, expires_at: expiresAt, execution_authorized: false }) };
     }
     return { ok: true, json: async () => ({ tickets: [] }) };
   } });

@@ -28,7 +28,9 @@ function fixture(initial, target = "http://127.0.0.1:8080") {
           const result = await responses.get(message.type)(message);
           return result?.status ? withPower(result) : result;
         }
-        if (message.type === "extension.getAutomationTarget") return target ? { ok: true, url: target } : { ok: false, error: "Backend offline; destination unknown." };
+        if (message.type === "extension.getAutomationTarget") return target
+          ? { ok: true, destinations: [{ kind: "ticket-service", label: "Local ticket service", available: true, configured: true, state: "reachable", url: target, error: "" }] }
+          : { ok: false, error: "Backend offline; destination unknown." };
         if (message.type === "extension.getPowerState") return {ok: true, power: structuredClone(state.power)};
         return structuredClone(state);
       }
@@ -138,7 +140,7 @@ test("screenshot warnings remain visible independently of a successful save or g
   assert.equal(f.elements.warning.textContent, state.session.warning);
 });
 
-const policy = { enabled: true, consent: true, target_url: "http://127.0.0.1:8080", use_ai: false, max_tickets: 5 };
+const policy = { enabled: true, consent: true, target_kind: "ticket-service", target_url: "http://127.0.0.1:8080", use_ai: false, max_tickets: 5 };
 const automatic = (status = "queued") => ({ ok: true, enabled: true, status: "automation", session: null,
   result: { id: "rec", eventCount: 3, automationPolicy: { ...policy }, automationCheckedAt: 1700000000000,
     automation: { status, stage: "delivery", ticket_count: 2, delivered_count: 1 }, error: "" } });
@@ -424,7 +426,7 @@ test("destination discovery finishing after Turn off cannot enable automation", 
     f.setState(idlePower()); return {ok: true, power: powerState("off")};
   });
   await f.click("turnOffBtn");
-  finishTarget({ok: true, url: "http://127.0.0.1:9999"}); await flush();
+  finishTarget({ok: true, destinations: [{ kind: "ticket-service", label: "Local ticket service", available: true, configured: true, state: "reachable", url: "http://127.0.0.1:9999", error: "" }]}); await flush();
   assert.equal(f.elements.automation.disabled, true);
   assert.doesNotMatch(f.elements.automationTarget.textContent, /9999/);
   assert.equal(f.elements.backendBanner.hidden, true);

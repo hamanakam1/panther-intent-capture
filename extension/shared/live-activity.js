@@ -3,7 +3,7 @@ import { sanitizeCaptureEvent, sanitizeText, sanitizeUrl } from "./redaction.js"
 
 const SOURCE_WINDOW = 30;
 const VISIBLE_EVENTS = 12;
-const MAX_PATTERNS = 4;
+const MAX_PATTERNS = 5;
 const EVENT_TYPES = new Set(["click", "change", "submit", "navigation", "diagnostic"]);
 
 // Stored sessions are normally structured-cloned data. Do not invoke getters
@@ -70,6 +70,8 @@ function projectEvent(raw, seq) {
     if (value) safeTarget[key] = value;
   }
   safeTarget.href = url(field(target, "href"));
+  // A click on an element the page never marked as a control.
+  if (field(target, "inert") === true) safeTarget.inert = true;
   // Reuse the capture allowlist: input labels, values, typed keys and arbitrary
   // target properties must not become a second, less-private capture channel.
   const clean = sanitizeCaptureEvent({ type, url: url(field(raw, "url")), target: safeTarget }, timestamp(field(raw, "ts")));
@@ -136,6 +138,24 @@ function errorPattern(events) {
     title: failures.length === 1 ? "The page reported a failure" : `The page reported ${failures.length} failures`,
     detail: "The page's own error stream reported a failure during this capture. It is an observation of what the page said, not a verified defect and not a reproduction.",
     evidence: failures.map((event) => event.public.seq),
+    hypothesis: true
+  };
+}
+
+/**
+ * Surface clicks that landed on something the page never marked as a control.
+ *
+ * The element looked interactive to the person, so the control may be missing
+ * a role or an accessible name. The wording keeps that a possibility.
+ */
+function nonControlPattern(events) {
+  const inert = events.filter((event) => event.public.type === "click" && event.control.inert === true);
+  if (!inert.length) return null;
+  return {
+    kind: "non_control_click",
+    title: "Clicked an element that is not a control",
+    detail: `${inert.length} click(s) landed on an element the page never marked as a control, although it presented itself as interactive. The control may be missing a role or an accessible name, or the click may have had no effect. No failure is verified.`,
+    evidence: inert.map((event) => event.public.seq),
     hypothesis: true
   };
 }
@@ -210,7 +230,7 @@ export function buildLiveActivity(session) {
       recentEvents,
       summary: latest ? text(`${latest.label}. ${eventCount} captured event${eventCount === 1 ? "" : "s"} in this session. Outcomes are not verified.`, 300) : "No page interactions have been captured yet.",
       inferredIntent: intent(visible),
-      patterns: [errorPattern(visible), repeatPattern(visible, "click"), navigationPattern(visible), repeatPattern(visible, "change")].filter(Boolean),
+      patterns: [errorPattern(visible), nonControlPattern(visible), repeatPattern(visible, "click"), navigationPattern(visible), repeatPattern(visible, "change")].filter(Boolean),
       source: "rules",
       windowStartSeq: recentEvents[0]?.seq || 0
     };
@@ -244,7 +264,7 @@ export function sanitizeLiveActivity(value) {
     const visible = new Set(recentEvents.map((event) => event.seq));
     const rawPatterns = field(value, "patterns");
     const patterns = [];
-    const patternKinds = new Set(["page_error", "repeated_clicks", "repeated_changes", "navigation_loop"]);
+    const patternKinds = new Set(["page_error", "non_control_click", "repeated_clicks", "repeated_changes", "navigation_loop"]);
     const patternCount = Array.isArray(rawPatterns) ? Math.min(field(rawPatterns, "length"), MAX_PATTERNS) : 0;
     for (let i = 0; i < patternCount; i++) {
       const raw = field(rawPatterns, String(i));

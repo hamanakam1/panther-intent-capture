@@ -13,12 +13,17 @@ from urllib.parse import urlsplit
 
 import storage
 import automation
+import destinations
 import live_insights
+import replay
 from redaction import sanitize_events
 from tickets import GENERATION_REVISION, capture_diagnostics, generate_drafts, load_tickets, save_tickets, DraftGenerationError
-from integrations import SCHEMA_VERSION, dashboard_status, export_bundle, preview_ticket, submit_ticket
+from integrations import SCHEMA_VERSION, export_bundle
 
 UPLOAD_LIMIT = 64 * 1024 * 1024
+# The backend's own HTTP API version. It moves independently of the exported
+# intent-bundle contract, which is reported separately as bundle_schema_version.
+API_VERSION = "1.1"
 UI_ROOT = Path(__file__).resolve().parents[2] / "extension"
 UI_FILES = {"options/options.html", "options/options.js", "options/options.css", "options/automation-state.js", "shared/constants.js"}
 
@@ -132,6 +137,16 @@ def _text(value, limit):
     if len(value) > limit:
         raise ValueError(f"Text exceeds {limit} characters")
     return value
+
+
+def _query_format(handler):
+    """The requested output format, or an empty string for the default."""
+    query = urlsplit(handler.path).query
+    for pair in query.split("&"):
+        key, _, value = pair.partition("=")
+        if key == "format":
+            return value[:40]
+    return ""
 
 
 def _safe_url(value):
@@ -358,7 +373,7 @@ def handle_request(handler: BaseHTTPRequestHandler):
             return
         parts = path[len(prefix):].strip("/").split("/")
         if parts == ["health"] and method == "GET":
-            _json(handler, 200, {"status": "ok", "service": "panther-intent-capture-backend", "schema_version": "1.1",
+            _json(handler, 200, {"status": "ok", "service": "panther-intent-capture-backend", "schema_version": API_VERSION,
                                  "bundle_schema_version": SCHEMA_VERSION,
                                  "capabilities": ["events", "screenshots", "diagnostics", "drafts", "json-export", "ticket-service", "automatic-delivery"]})
             return
@@ -371,8 +386,11 @@ def handle_request(handler: BaseHTTPRequestHandler):
         if parts == ["recordings"] and method == "GET":
             _json(handler, 200, {"recordings": storage.list_recordings()})
             return
-        if parts == ["integrations", "ticket-service"] and method == "GET":
-            _json(handler, 200, dashboard_status())
+        if parts == ["integrations"] and method == "GET":
+            _json(handler, 200, {"destinations": destinations.catalogue()})
+            return
+        if len(parts) == 2 and parts[0] == "integrations" and destinations.known(parts[1]) and method == "GET":
+            _json(handler, 200, destinations.status(parts[1]))
             return
         if len(parts) == 2 and parts[0] == "automation":
             if method == "GET":
@@ -387,7 +405,8 @@ def handle_request(handler: BaseHTTPRequestHandler):
             return
         if len(parts) == 2 and parts[0] == "recordings" and method == "DELETE":
             automation.control(parts[1], "cancel")
-        integration = len(parts) == 4 and parts[:2] == ["integrations", "ticket-service"] and parts[2] in ("preview", "submit")
+        integration = (len(parts) == 4 and parts[0] == "integrations"
+                       and destinations.known(parts[1]) and parts[2] in ("preview", "submit"))
         if not integration and (len(parts) not in (2, 3) or parts[0] not in ("recordings", "tickets", "export", "infer")):
             _json(handler, 404, {"error": "not found"})
             return
@@ -404,13 +423,13 @@ def handle_request(handler: BaseHTTPRequestHandler):
         if integration and method == "POST":
             data = _body_json(handler)
             ticket = _reviewed_ticket(entry, data)
-            preview = preview_ticket(entry, ticket)
+            preview = destinations.preview(parts[1], entry, ticket)
             if parts[2] == "preview":
                 _json(handler, 200, preview)
             elif data.get("confirmed") is not True or data.get("payload_hash") != preview["payload_hash"]:
                 _json(handler, 409, {"error": "Preview and explicitly confirm this exact ticket before sending"})
             else:
-                result = submit_ticket(entry, ticket)
+                result = destinations.submit(parts[1], entry, ticket)
                 _json(handler, 200 if result.get("ok") else 409, result)
             return
         if parts[0] == "recordings":
@@ -422,6 +441,18 @@ def handle_request(handler: BaseHTTPRequestHandler):
                 _json(handler, 200, {"events": _load_events(entry)})
             elif method == "GET" and parts[-1] == "diagnostics":
                 _json(handler, 200, capture_diagnostics(sanitize_events(_load_events(entry))))
+            elif method == "GET" and parts[-1] == "replay":
+                plan = replay.build_plan(entry, sanitize_events(_load_events(entry)))
+                if _query_format(handler) == "playwright":
+                    body = replay.render_playwright(plan).encode()
+                    handler.send_response(200)
+                    handler.send_header("Content-Type", "text/plain; charset=utf-8")
+                    handler.send_header("Content-Length", str(len(body)))
+                    _headers(handler)
+                    handler.end_headers()
+                    handler.wfile.write(body)
+                    return
+                _json(handler, 200, plan)
             elif method == "GET" and parts[-1] == "screenshots":
                 shot_path = entry.get("screenshots_path")
                 # Screenshot pixels are intentionally retained for review but are

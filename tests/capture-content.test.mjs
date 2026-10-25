@@ -6,15 +6,22 @@ import { readFile } from "node:fs/promises";
 const script = await readFile(new URL("../extension/content/content.js", import.meta.url), "utf8");
 
 class Element {
-  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.attributes = {}; this.listeners = {}; this.style = {}; this.textContent = ""; }
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.attributes = {}; this.listeners = {}; this.style = {}; this.textContent = ""; this.control = true; }
   setAttribute(key, value) { this.attributes[key] = value; }
   getAttribute(key) { return this.attributes[key] ?? null; }
+  hasAttribute(key) { return this.attributes[key] !== undefined; }
   append(...children) { for (const child of children) { this.children.push(child); child.parent = this; } }
   appendChild(child) { this.append(child); }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); }
   attachShadow(options) { this.shadowOptions = options; this.shadow = new Element("shadow"); return this.shadow; }
   addEventListener(type, fn) { this.listeners[type] = fn; }
-  closest() { return this.semantic || this; }
+  // `control: false` models an element the page never marked as a control.
+  // `semantic` is a control ancestor; `formAncestor` is a surrounding form.
+  closest(selector) {
+    if (selector === "form") return this.formAncestor || null;
+    if (this.semantic) return this.semantic;
+    return this.control === false ? null : this;
+  }
   querySelector() { return this.editableChild || null; }
 }
 
@@ -34,6 +41,7 @@ function fixture() {
   const context = vm.createContext({
     URL, Date, console, CustomEvent: FakeCustomEvent, PerformanceObserver: FakePerformanceObserver,
     performance: { timeOrigin: 1700000000000 },
+    getComputedStyle: (element) => ({ cursor: element?.cursor || "" }),
     location: { href: "http://127.0.0.1:8080/#master" },
     document: { documentElement: root, createElement: (tag) => new Element(tag), addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); } },
     window: { addEventListener: (type, fn) => { windowListeners[type] = fn; } },
@@ -171,6 +179,51 @@ test("floating panel exposes generating and ready draft state and links to revie
   assert.equal(box.children[2].children[1].hidden, false);
   box.children[2].children[1].listeners.click();
   assert.equal(f.messages.at(-1).type, "page.openReview");
+});
+
+test("a click on something that is not a control is kept only when it looks interactive", () => {
+  const f = fixture(); f.start();
+  const baseline = f.events().length;
+  // An ordinary click on empty space is not evidence of anything.
+  const plain = new Element("div");
+  plain.control = false;
+  f.dispatch("click", plain);
+  assert.equal(f.events().length, baseline);
+  // An element the page styled as clickable is kept, and is marked as such.
+  const pointer = new Element("div");
+  pointer.control = false;
+  pointer.cursor = "pointer";
+  pointer.textContent = "private page text";
+  f.dispatch("click", pointer);
+  const event = f.events().at(-1).payload;
+  assert.equal(f.events().length, baseline + 1);
+  assert.equal(event.type, "click");
+  assert.equal(event.target.inert, true);
+  assert.equal(event.target.tag, "div");
+  assert.equal(event.target.label, undefined);
+  assert.doesNotMatch(JSON.stringify(event), /private page text/);
+  // A focusable element is kept too.
+  const focusable = new Element("span");
+  focusable.control = false;
+  focusable.setAttribute("tabindex", "0");
+  f.dispatch("click", focusable);
+  assert.equal(f.events().at(-1).payload.target.inert, true);
+  // A control is never marked as a non-control.
+  f.dispatch("click", new Element("button"));
+  assert.equal(f.events().at(-1).payload.target.inert, undefined);
+});
+
+test("a click inside a form but not on a control is marked without losing the form", () => {
+  const f = fixture(); f.start();
+  const form = new Element("form");
+  const inner = new Element("div");
+  inner.control = false;
+  inner.cursor = "pointer";
+  inner.formAncestor = form;
+  f.dispatch("click", inner);
+  const event = f.events().at(-1).payload;
+  assert.equal(event.target.tag, "form");
+  assert.equal(event.target.inert, true);
 });
 
 test("page failures are reported as bounded observations and never read page text", () => {

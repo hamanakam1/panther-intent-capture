@@ -28,6 +28,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - Nothing yet
 
+## [1.7.0] - 2026-10-22
+
+### Added
+- **Possible-friction signals in the ticket.** Repeated clicks on one control and clicks on an element the page never marked as a control now reach the draft, the export and the review page, instead of only the live status window. Every signal is a hypothesis, never a confirmed defect.
+- **A click on a non-control is captured** when the element declares a role, is focusable, or is styled as a pointer. An ordinary click on empty space stays out of the capture.
+- **Replay plans.** A capture can be exported as a destination-neutral, versioned plan of the path that was taken, with a stable handle for each control, the recorded failures and the friction signals. `GET /api/extension/recordings/<id>/replay` returns the plan, and `?format=playwright` returns a reviewable Playwright script. Panther never runs it.
+- **A GitHub issues destination.** A reviewed draft can be delivered to a named repository as an issue, with its own credential, a stable identity per draft, an independent readback, a durable receipt, and the same preview-and-confirm contract as the local ticket service. The API host is fixed and the local ticket service stays loopback-only.
+- **A destination catalogue.** `GET /api/extension/integrations` lists every destination with its status. The popup and the review page let a destination be chosen explicitly, and the chosen destination is frozen for the session.
+
+### Changed
+- The portable intent bundle moves to schema version 1.2, adding the optional `friction` array on a ticket. A 1.1 consumer must select the schema it understands and quarantine an unknown version.
+- An automatic-delivery policy now names its destination and moves to policy version 2. A version 1 policy predates more than one destination and names the local ticket service implicitly.
+- A regenerated draft keeps the fields a reviewer already changed, instead of discarding that decision.
+
+### Fixed
+- Nothing yet
+
+### Security
+- A GitHub credential is read only by the adapter. It never appears in a preview, a receipt, an export, a status report or a log, and a credential readable by anyone else is ignored.
+- A delivery to a remote destination is chosen explicitly and its target is frozen for the session. A later configuration change blocks the admitted job instead of retargeting it.
+- A replay plan never carries a typed value, because Panther never captured one, and it never authorizes execution.
+
 ## [1.6.0] - 2026-10-22
 
 ### Added

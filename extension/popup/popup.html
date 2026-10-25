@@ -47,7 +47,8 @@
     <div class="consent-row"><input type="checkbox" id="screenshots"><label for="screenshots">Include up to 5 screenshots this session</label></div>
     <p class="note">Screenshots may contain private information; pixels are not redacted. Video and audio are unavailable in this release.</p>
     <div class="consent-row"><input type="checkbox" id="automation"><label for="automation">Automatically deliver tickets this session</label></div>
-    <p id="automationTarget" class="note">Checking the configured dashboard destination…</p>
+    <div class="consent-row"><label for="automationDestination">Destination</label><select id="automationDestination"></select></div>
+    <p id="automationTarget" class="note">Checking the configured delivery destination…</p>
     <div class="consent-row"><input type="checkbox" id="automationAI" disabled><label for="automationAI">Use local AI to propose tickets this session</label></div>
     <p class="note">Stop &amp; deliver creates up to 5 review-only backlog tickets at the displayed destination. Summaries, not screenshot pixels, are delivered. Panther does not execute the work. Local AI is optional; otherwise tickets use observed events only. Consent expires 24 hours after Start. Already delivered or in-flight tickets cannot be undone by cancellation.</p>
   </section>

@@ -23,7 +23,7 @@ try:
 except ImportError:  # python backend/server.py
     import storage
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 FENCE = "not authorized for autonomous execution"
 SOURCE = "panther-intent-capture:agent-proposal"
 REQUEST_TIMEOUT = 8
@@ -85,6 +85,39 @@ def _references(value: Any) -> list:
                      and isinstance(val, (str, int, float)) and len(str(val)) <= 200}
             if clean:
                 result.append(clean)
+    return result
+
+
+def _friction(value: Any) -> list:
+    """Copy bounded friction hypotheses.
+
+    A friction signal is a possibility about the recorded actions, never a
+    confirmed defect. Only the allowlisted fields travel.
+    """
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value[:10]:
+        if not isinstance(item, dict):
+            continue
+        clean: dict[str, Any] = {}
+        kind = item.get("kind")
+        if isinstance(kind, str) and kind:
+            clean["kind"] = kind[:60]
+        title = item.get("title")
+        if isinstance(title, str) and title:
+            clean["title"] = title[:200]
+        detail = item.get("detail")
+        if isinstance(detail, str) and detail:
+            clean["detail"] = detail[:600]
+        indices = item.get("event_indices")
+        if isinstance(indices, list):
+            clean["event_indices"] = [entry for entry in indices[:50]
+                                      if isinstance(entry, int) and not isinstance(entry, bool) and entry >= 1]
+        if item.get("hypothesis") is True:
+            clean["hypothesis"] = True
+        if clean:
+            result.append(clean)
     return result
 
 
@@ -161,6 +194,7 @@ def _draft(ticket: dict) -> dict:
         "evidence": _text(ticket.get("evidence"), 6000),
         "evidence_refs": _references(ticket.get("evidence_refs")),
         "diagnostics": _diagnostics(ticket.get("diagnostics")),
+        "friction": _friction(ticket.get("friction")),
         "screenshot_timestamps": [v for v in screenshots[:20]
                                  if isinstance(v, (int, float)) and not isinstance(v, bool)],
         "source_url": _safe_url(ticket.get("source_url") or provenance.get("source_url") or provenance.get("url")),

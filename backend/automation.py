@@ -14,6 +14,7 @@ import threading
 import time
 from pathlib import Path
 
+import destinations
 import integrations
 import storage
 import tickets
@@ -46,7 +47,7 @@ def admit_policy(value, capture_start: float):
         return None
     if _PAUSED.is_set():
         raise ValueError("Panther is turning off; new automatic delivery is not admitted")
-    allowed = {"enabled", "consent", "target_url", "use_ai", "max_tickets"}
+    allowed = {"enabled", "consent", "target_url", "target_kind", "use_ai", "max_tickets"}
     if not isinstance(value, dict) or set(value) - allowed:
         raise ValueError("Invalid automation policy")
     if value.get("enabled") is not True or value.get("consent") is not True:
@@ -56,14 +57,17 @@ def admit_policy(value, capture_start: float):
     cap = value.get("max_tickets", MAX_TICKETS)
     if type(cap) is not int or not 1 <= cap <= MAX_TICKETS:
         raise ValueError("Automatic delivery allows at most five drafts per capture")
-    target = integrations._target()
+    kind = value.get("target_kind") or destinations.TICKET_SERVICE
+    if not destinations.known(kind):
+        raise ValueError("Automatic-delivery destination is unknown")
+    target = destinations.target(kind)
     if value.get("target_url") != target:
-        raise ValueError("Automation target changed; confirm the configured dashboard before capturing")
+        raise ValueError("Automatic-delivery destination changed; confirm the configured destination before capturing")
     now = time.time()
     if (not math.isfinite(capture_start) or capture_start <= 0
             or capture_start > now + 300 or capture_start + CONSENT_SECONDS <= now):
         raise ValueError("Automatic-delivery consent must be from a capture started within the last 24 hours")
-    policy = {"enabled": True, "consent": True, "policy_version": 1, "target_url": target,
+    policy = {"enabled": True, "consent": True, "policy_version": 2, "target_kind": kind, "target_url": target,
               "use_ai": value["use_ai"], "max_tickets": cap, "consented_at": capture_start,
               "admitted_at": now, "expires_at": capture_start + CONSENT_SECONDS}
     if _BROWSER_OWNED:
@@ -78,7 +82,7 @@ def require_browser_active():
 
 def _validate_policy(policy):
     if (not isinstance(policy, dict) or policy.get("enabled") is not True
-            or policy.get("consent") is not True or policy.get("policy_version") != 1
+            or policy.get("consent") is not True or policy.get("policy_version") not in (1, 2)
             or type(policy.get("use_ai")) is not bool
             or type(policy.get("max_tickets")) is not int or not 1 <= policy["max_tickets"] <= MAX_TICKETS):
         raise ValueError("Automatic-delivery policy is missing or invalid")
@@ -89,6 +93,11 @@ def _validate_policy(policy):
         raise ValueError("Automatic-delivery consent expiry was changed")
     if not isinstance(policy.get("target_url"), str):
         raise ValueError("Automatic-delivery target is missing")
+    # Version 1 policies predate more than one destination and named the
+    # local ticket service implicitly.
+    kind = policy.get("target_kind") or destinations.TICKET_SERVICE
+    if not destinations.known(kind):
+        raise ValueError("Automatic-delivery destination is unknown")
 
 
 def _path(recording_id):
@@ -303,12 +312,13 @@ def _checkpoint(recording_id):
     if time.time() >= job["policy"]["expires_at"]:
         _set_state(job, "blocked", "Automatic-delivery consent expired after 24 hours")
         raise _StopJob()
+    kind = job["policy"].get("target_kind") or destinations.TICKET_SERVICE
     try:
-        configured_target = integrations._target()
+        configured_target = destinations.target(kind)
     except ValueError:
         configured_target = None
     if configured_target != job["policy"]["target_url"]:
-        _set_state(job, "blocked", "Configured dashboard differs from the consented destination")
+        _set_state(job, "blocked", "Configured destination differs from the consented destination")
         raise _StopJob()
     return entry, job
 
@@ -327,7 +337,9 @@ def _public(job):
     result = {key: copy.deepcopy(job.get(key)) for key in (
         "recording_id", "status", "stage", "ticket_count", "delivered_count", "attempts",
         "next_retry_at", "error", "deliveries", "updated_at")}
-    result.update(ok=True, target_url=job["policy"]["target_url"], use_ai=job["policy"]["use_ai"],
+    result.update(ok=True, target_url=job["policy"]["target_url"],
+                  target_kind=job["policy"].get("target_kind") or destinations.TICKET_SERVICE,
+                  use_ai=job["policy"]["use_ai"],
                   max_tickets=job["policy"]["max_tickets"], expires_at=job["policy"]["expires_at"],
                   execution_authorized=False)
     return result
@@ -491,6 +503,7 @@ def _process(recording_id):
                        updated_at=time.time())
             _save(job)
             frozen = job.get("frozen")
+            kind = job["policy"].get("target_kind") or destinations.TICKET_SERVICE
         if not frozen:
             events = json.loads(Path(entry["events_path"]).read_text()) if entry.get("events_path") else []
             generated = tickets.generate_drafts(entry, events, use_ai=job["policy"]["use_ai"])
@@ -505,7 +518,7 @@ def _process(recording_id):
                 snapshot = _snapshot(entry)
                 items = []
                 for ticket in generated["tickets"]:
-                    preview = integrations.preview_ticket(snapshot, ticket)
+                    preview = destinations.preview(kind, snapshot, ticket)
                     if preview["target_url"] != job["policy"]["target_url"]:
                         raise ValueError("Configured destination changed before proposal freeze")
                     prior = preview.get("receipt")
@@ -522,11 +535,11 @@ def _process(recording_id):
                 delivered = {row["ticket_id"] for row in job["deliveries"] if row["state"] == "delivered" and row["verified"]}
                 if item["ticket"]["id"] in delivered:
                     continue
-                preview = integrations.preview_ticket(frozen["recording"], item["ticket"])
+                preview = destinations.preview(kind, frozen["recording"], item["ticket"])
                 if (preview["target_url"] != job["policy"]["target_url"]
                         or preview["payload_hash"] != item["payload_hash"]):
                     raise ValueError("The frozen destination or proposal payload changed; fresh consent is required")
-                result = integrations.submit_ticket(frozen["recording"], item["ticket"],
+                result = destinations.submit(kind, frozen["recording"], item["ticket"],
                     before_send=lambda: _checkpoint(recording_id))
             if not _record_result(recording_id, item["ticket"]["id"], result):
                 return
