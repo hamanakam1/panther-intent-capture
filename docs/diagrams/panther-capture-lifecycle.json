@@ -1,0 +1,189 @@
+{
+  "schema_version": 3,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "The capture lifecycle",
+    "quality_profile": "showcase",
+    "output": "docs/diagrams/panther-capture-lifecycle.html"
+  },
+  "mainPath": [
+    "off",
+    "on",
+    "capturing",
+    "drafting",
+    "review",
+    "delivered"
+  ],
+  "states": [
+    {
+      "id": "off",
+      "type": "start",
+      "label": "Panther is off",
+      "sublabel": "Nothing runs",
+      "tag": "off",
+      "step": "01"
+    },
+    {
+      "id": "on",
+      "type": "active",
+      "label": "Panther is on",
+      "sublabel": "Backend up",
+      "tag": "runtime",
+      "step": "02"
+    },
+    {
+      "id": "capturing",
+      "type": "active",
+      "label": "Capturing",
+      "sublabel": "Chosen tab",
+      "tag": "capture",
+      "step": "03"
+    },
+    {
+      "id": "drafting",
+      "type": "active",
+      "label": "Preparing drafts",
+      "sublabel": "Evidence or AI",
+      "tag": "model",
+      "step": "05"
+    },
+    {
+      "id": "review",
+      "type": "waiting",
+      "label": "Review required",
+      "sublabel": "Person decides",
+      "tag": "gate",
+      "step": "06"
+    },
+    {
+      "id": "delivered",
+      "type": "success",
+      "label": "Ticket verified",
+      "sublabel": "Read back",
+      "tag": "done",
+      "step": "07"
+    },
+    {
+      "id": "failed",
+      "type": "failure",
+      "label": "Generation failed",
+      "sublabel": "Retryable",
+      "tag": "retryable"
+    },
+    {
+      "id": "cancelled",
+      "type": "failure",
+      "label": "Cancelled",
+      "sublabel": "Consent withdrawn",
+      "tag": "terminal"
+    },
+    {
+      "id": "expired",
+      "type": "failure",
+      "label": "Consent expired",
+      "sublabel": "24 hours",
+      "tag": "terminal"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "off-on",
+      "from": "off",
+      "to": "on",
+      "label": "Turn on"
+    },
+    {
+      "id": "on-capturing",
+      "from": "on",
+      "to": "capturing",
+      "label": "Start"
+    },
+    {
+      "id": "drafting-review",
+      "from": "drafting",
+      "to": "review",
+      "label": "Ready"
+    },
+    {
+      "id": "capturing-drafting",
+      "from": "capturing",
+      "to": "drafting",
+      "label": "Stop"
+    },
+    {
+      "id": "review-delivered",
+      "from": "review",
+      "to": "delivered",
+      "label": "Send"
+    },
+    {
+      "id": "on-off",
+      "from": "on",
+      "to": "off",
+      "label": "Turn off",
+      "variant": "security"
+    },
+    {
+      "id": "capturing-off",
+      "from": "capturing",
+      "to": "off",
+      "label": "Turn off",
+      "variant": "security"
+    },
+    {
+      "id": "capturing-cancelled",
+      "from": "capturing",
+      "to": "cancelled",
+      "label": "Withdrawn",
+      "variant": "security"
+    },
+    {
+      "id": "review-cancelled",
+      "from": "review",
+      "to": "cancelled",
+      "label": "Cancel",
+      "variant": "security"
+    },
+    {
+      "id": "review-expired",
+      "from": "review",
+      "to": "expired",
+      "label": "Expiry",
+      "variant": "security"
+    },
+    {
+      "id": "drafting-failed",
+      "from": "drafting",
+      "to": "failed",
+      "label": "Failed",
+      "variant": "security"
+    },
+    {
+      "id": "failed-drafting",
+      "from": "failed",
+      "to": "drafting",
+      "label": "retry",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "On is not capturing",
+      "items": [
+        "Turning Panther on starts the backend, never the recording",
+        "Capture needs consent for the tab you chose",
+        "Turning off stops the owned backend and keeps saved evidence"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Nothing is silently dropped",
+      "items": [
+        "A failed generation stays visible and is retryable",
+        "Cancelled and expired consent end the session explicitly",
+        "Retained information is labelled historical, never resumed as a capture"
+      ]
+    }
+  ]
+}

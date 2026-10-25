@@ -1,0 +1,252 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "From a captured session to a verified backlog ticket",
+    "quality_profile": "showcase",
+    "output": "docs/diagrams/panther-delivery-workflow.html"
+  },
+  "lanes": [
+    {
+      "id": "person",
+      "label": "The person"
+    },
+    {
+      "id": "page",
+      "label": "The page"
+    },
+    {
+      "id": "ext",
+      "label": "Extension"
+    },
+    {
+      "id": "back",
+      "label": "Backend"
+    },
+    {
+      "id": "model",
+      "label": "Local model"
+    },
+    {
+      "id": "dest",
+      "label": "Destination"
+    }
+  ],
+  "phases": [
+    {
+      "id": "intake",
+      "label": "Consent",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "capture",
+      "label": "Capture",
+      "fromCol": 2,
+      "toCol": 2,
+      "variant": "emphasis"
+    },
+    {
+      "id": "draft",
+      "label": "Draft",
+      "fromCol": 3,
+      "toCol": 4
+    },
+    {
+      "id": "deliver",
+      "label": "Deliver",
+      "fromCol": 5,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "person",
+    "page",
+    "consent",
+    "events",
+    "capture",
+    "draft",
+    "review",
+    "preview",
+    "ticket"
+  ],
+  "nodes": [
+    {
+      "id": "person",
+      "lane": "person",
+      "col": 0,
+      "type": "external",
+      "label": "Open Panther",
+      "sublabel": "From the toolbar",
+      "width": 136
+    },
+    {
+      "id": "page",
+      "lane": "page",
+      "col": 1,
+      "type": "external",
+      "label": "Chosen page",
+      "sublabel": "One origin",
+      "width": 136
+    },
+    {
+      "id": "consent",
+      "lane": "ext",
+      "col": 1,
+      "type": "frontend",
+      "label": "Consent and Start",
+      "sublabel": "Explicit, per session",
+      "width": 136
+    },
+    {
+      "id": "events",
+      "lane": "ext",
+      "col": 2,
+      "type": "frontend",
+      "label": "Records interactions",
+      "sublabel": "No typed values or keys",
+      "width": 136
+    },
+    {
+      "id": "capture",
+      "lane": "back",
+      "col": 3,
+      "type": "backend",
+      "label": "Saves the capture",
+      "sublabel": "Idempotent upload",
+      "width": 136
+    },
+    {
+      "id": "draft",
+      "lane": "back",
+      "col": 4,
+      "type": "backend",
+      "label": "Evidence draft",
+      "sublabel": "Observed steps only",
+      "width": 136
+    },
+    {
+      "id": "ai",
+      "lane": "model",
+      "col": 4,
+      "type": "cloud",
+      "label": "Optional local AI",
+      "sublabel": "Loopback model",
+      "width": 136
+    },
+    {
+      "id": "review",
+      "lane": "person",
+      "col": 5,
+      "type": "external",
+      "label": "Review and confirm",
+      "sublabel": "Never automatic",
+      "width": 136
+    },
+    {
+      "id": "preview",
+      "lane": "back",
+      "col": 5,
+      "type": "backend",
+      "label": "Preview the payload",
+      "sublabel": "Exact bytes to send",
+      "width": 136
+    },
+    {
+      "id": "ticket",
+      "lane": "dest",
+      "col": 5,
+      "type": "external",
+      "label": "Backlog ticket",
+      "sublabel": "no-auto review fence",
+      "width": 136
+    }
+  ],
+  "edges": [
+    {
+      "id": "person-to-page",
+      "from": "person",
+      "to": "page",
+      "label": "chooses a tab",
+      "variant": "emphasis"
+    },
+    {
+      "id": "page-to-consent",
+      "from": "page",
+      "to": "consent",
+      "label": "grants consent"
+    },
+    {
+      "id": "consent-to-events",
+      "from": "consent",
+      "to": "events",
+      "label": "starts capture"
+    },
+    {
+      "id": "events-to-capture",
+      "from": "events",
+      "to": "capture",
+      "label": "Stop saves the session"
+    },
+    {
+      "id": "capture-to-draft",
+      "from": "capture",
+      "to": "draft",
+      "label": "evidence draft"
+    },
+    {
+      "id": "draft-to-ai",
+      "from": "draft",
+      "to": "ai",
+      "label": "optional proposal",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "ai-to-review",
+      "from": "ai",
+      "to": "review",
+      "label": "unverified proposals",
+      "variant": "dashed"
+    },
+    {
+      "id": "draft-to-review",
+      "from": "draft",
+      "to": "review",
+      "label": "editable draft"
+    },
+    {
+      "id": "review-to-preview",
+      "from": "review",
+      "to": "preview",
+      "label": "confirm one draft"
+    },
+    {
+      "id": "preview-to-ticket",
+      "from": "preview",
+      "to": "ticket",
+      "label": "submit, then read back"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two deliveries, one gate",
+      "items": [
+        "A manual preview shows the exact payload before anything is sent",
+        "Automatic delivery is a separate opt-in with a five-ticket cap",
+        "Both are read back at the destination before they count as verified"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Evidence before inference",
+      "items": [
+        "An evidence draft needs no model at all",
+        "Local AI only proposes; it never submits and never executes",
+        "A proposal stays a proposal until a person confirms it"
+      ]
+    }
+  ]
+}

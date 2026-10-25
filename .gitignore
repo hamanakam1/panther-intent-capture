@@ -23,3 +23,7 @@ __pycache__/
 /output/
 .playwright/
  
+
+# Rendered diagram artifacts (regenerate with scripts/render_diagram_pngs.py)
+docs/diagrams/*.html
+docs/diagrams/*.delivery.json
