@@ -1,7 +1,7 @@
-import { BACKEND_ORIGIN } from "../shared/constants.js";
+import { BACKEND_ORIGIN, backendReadiness, workerReadiness, UPDATE_GUIDANCE } from "../shared/constants.js";
 import { loadConsentLog } from "../shared/audit.js";
 
-const elements = Object.fromEntries(["status", "powerStatus", "powerHelp", "powerError", "monitorBtn", "monitorError", "setupNeeded", "extensionId", "turnOnBtn", "turnOffBtn", "consent", "goal", "screenshots", "automation", "automationAI", "automationTarget", "automationDestination", "recordBtn", "stopBtn", "retryBtn", "generateBtn", "refreshAutomationBtn", "retryAutomationBtn", "cancelAutomationBtn", "reviewBtn", "discardBtn", "meta", "warning", "error", "log", "backendBanner", "previewNotice", "nextTitle", "nextDetail", "pageLabel", "pageTitle", "pageDetail", "captureSetup", "consentHelp", "metricScope", "eventMetric", "screenshotMetric", "draftMetric", "sessionNote", "optionSummary", "recentStatus", "recentCaptures", "helperHealth", "refreshStatus", "newCaptureBtn", "goalContext", "capturedGoal"].map((id) => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(["status", "powerStatus", "powerHelp", "powerError", "monitorBtn", "monitorError", "setupNeeded", "extensionId", "turnOnBtn", "turnOffBtn", "consent", "goal", "screenshots", "automation", "automationAI", "automationTarget", "automationDestination", "recordBtn", "stopBtn", "retryBtn", "generateBtn", "refreshAutomationBtn", "retryAutomationBtn", "cancelAutomationBtn", "reviewBtn", "discardBtn", "meta", "warning", "error", "log", "backendBanner", "previewNotice", "nextTitle", "nextDetail", "pageLabel", "pageTitle", "pageDetail", "captureSetup", "consentHelp", "metricScope", "eventMetric", "screenshotMetric", "draftMetric", "sessionNote", "optionSummary", "recentStatus", "recentCaptures", "helperHealth", "refreshStatus", "newCaptureBtn", "goalContext", "capturedGoal", "workerReadiness", "loadedVersions"].map((id) => [id, document.getElementById(id)]));
 const browserAvailable = typeof chrome !== "undefined" && typeof chrome.runtime?.sendMessage === "function" && !!chrome.runtime.id;
 let current = { status: "idle", enabled: false, power: {state: "off", error: ""} };
 let busy = false;
@@ -25,6 +25,8 @@ let selectedPage = null;
 let pageChecked = false;
 let healthState = "unknown";
 let recentRequest = 0;
+let healthCheck = 0;
+let backend = backendReadiness(null);
 
 const runtimeState = () => pendingPower || current.power?.state || "off";
 const isOn = () => browserAvailable && runtimeState() === "on";
@@ -79,6 +81,9 @@ function renderDashboard() {
   elements.optionSummary.textContent = `${elements.screenshots.checked ? "Screenshots on" : "Screenshots off"} · ${elements.automation.checked ? "Delivery on" : "Delivery off"}`;
   elements.helperHealth.textContent = !browserAvailable ? "Toolbar extension required" : !statusConfirmed ? "Checking browser status…" : current.power?.configured === false && runtimeState() === "error" ? "Browser helper not connected" : !on ? "Local service is off or unconfirmed" : healthState === "available" ? "Local service connected" : healthState === "unavailable" ? "Local service unreachable" : "Checking local service…";
   elements.refreshStatus.disabled = !browserAvailable;
+  elements.workerReadiness.hidden = !browserAvailable || !statusConfirmed || workerReadiness(current.worker);
+  elements.workerReadiness.textContent = "The loaded capture worker needs an update. New captures are paused; Stop, Off and retained-capture recovery remain available. " + UPDATE_GUIDANCE;
+  elements.loadedVersions.textContent = `Loaded extension: ${browserAvailable ? chrome.runtime.getManifest?.().version || "unknown" : "unavailable"} · Loaded capture worker: ${current.worker?.app_version || "unknown"} · Running backend: ${on ? backend.version : "not checked while Off"}. Source files do not confirm loaded versions.`;
 }
 
 function renderPower() {
@@ -115,7 +120,7 @@ function syncConnections() {
     connectionActive = false;
     automationTarget = ""; targetError = "";
     elements.backendBanner.hidden = true;
-    healthState = "unknown";
+    healthState = "unknown"; backend = backendReadiness(null);
     elements.recentCaptures.replaceChildren();
     elements.recentStatus.textContent = browserAvailable ? "Turn on to load saved captures. No service request is made while off." : "Saved captures appear here in the toolbar extension.";
     return;
@@ -226,7 +231,7 @@ function render(state) {
   elements.newCaptureBtn.hidden = !on || !resultReady(state) || deliveryActive || preparingCapture || working;
   elements.newCaptureBtn.disabled = busy;
   elements.recordBtn.hidden = !on || !!state.session || working || deliveryActive || (resultReady(state) && !preparingCapture);
-  elements.recordBtn.disabled = !on || !state.enabled || busy || working || deliveryActive || (pageChecked && selectedPage?.eligible === false) || (elements.automation.checked && !automationTarget);
+  elements.recordBtn.disabled = !on || !workerReadiness(state.worker) || !state.enabled || busy || working || deliveryActive || (pageChecked && selectedPage?.eligible === false) || (elements.automation.checked && !automationTarget);
   elements.recordBtn.textContent = resultReady(state) ? "Start another capture" : "Start capture";
   elements.recordBtn.className = resultReady(state) ? "btn" : "btn primary";
   elements.stopBtn.hidden = !recording;
@@ -372,6 +377,8 @@ elements.newCaptureBtn.addEventListener("click", () => {
 elements.recordBtn.addEventListener("click", async () => {
   const epoch = powerEpoch;
   if (!isOn()) return;
+  await refresh();
+  if (!workerReadiness(current.worker)) { showError("New capture is paused until the loaded worker is compatible. " + UPDATE_GUIDANCE); return; }
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (epoch !== powerEpoch || !isOn()) return;
@@ -393,14 +400,22 @@ elements.discardBtn.addEventListener("click", () => {
 });
 
 async function checkBackend(version) {
+  const check = ++healthCheck;
   try {
-    const response = await fetch(`${BACKEND_ORIGIN}/api/extension/health`, { signal: AbortSignal.timeout(3000) });
-    if (version !== connectionVersion || !isOn()) return;
-    elements.backendBanner.hidden = response.ok;
-    healthState = response.ok ? "available" : "unavailable";
+    const response = await fetch(`${BACKEND_ORIGIN}/api/extension/health`, { cache: "no-store", signal: AbortSignal.timeout(3000) });
+    const health = response.ok ? await response.json() : null;
+    if (check !== healthCheck || version !== connectionVersion || !isOn()) return;
+    backend = backendReadiness(health);
+    healthState = backend.connected ? "available" : "unavailable";
+    elements.backendBanner.hidden = backend.ready;
+    elements.backendBanner.textContent = backend.connected
+      ? "The local service needs an update before draft editing or Companion export. " + UPDATE_GUIDANCE
+      : "Could not confirm the local service. Retained capture stays in this browser. Check the connection, then retry upload.";
   } catch {
-    if (version !== connectionVersion || !isOn()) return;
+    if (check !== healthCheck || version !== connectionVersion || !isOn()) return;
+    backend = backendReadiness(null);
     elements.backendBanner.hidden = false; healthState = "unavailable";
+    elements.backendBanner.textContent = "Could not confirm the local service. Retained capture stays in this browser. Check the connection, then retry upload.";
   }
   renderDashboard();
 }

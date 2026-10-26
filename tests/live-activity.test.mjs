@@ -7,6 +7,52 @@ const event = (type, ts = 1000, target = {}, url = origin) => ({ type, ts, url, 
 const session = (events = [], overrides = {}) => ({ consent: true, sessionId: "capture-1", title: "Example app", url: origin, goal: "", events, ...overrides });
 const clicks = (target = { tag: "button", id: "save", label: "Save" }) => [1000, 2000, 3000].map((ts) => event("click", ts, target));
 
+test("a page-reported failure is an observation with its own evidence, not a confirmed defect", () => {
+  const out = buildLiveActivity(session([
+    event("click", 1000, { tag: "button", label: "Save" }),
+    { type: "diagnostic", ts: 1200, url: origin, diagnostic: { kind: "uncaught_exception", message: "TypeError: x is not a function", source: "https://example.test/app.js", line: 12 } },
+    { type: "diagnostic", ts: 1300, url: origin, diagnostic: { kind: "http_error", message: "A request returned HTTP 500", source: "https://example.test/api/tickets", status: 500 } }
+  ]));
+  assert.deepEqual(out.recentEvents.map((item) => item.seq), [1, 2, 3]);
+  assert.match(out.recentEvents[1].label, /^Page error: TypeError/);
+  assert.match(out.recentEvents[2].label, /^Request failed: HTTP 500/);
+  const pattern = out.patterns.find((item) => item.kind === "page_error");
+  assert.ok(pattern);
+  assert.deepEqual(pattern.evidence, [2, 3]);
+  assert.equal(pattern.hypothesis, true);
+  assert.match(pattern.detail, /not a verified defect/);
+  assert.doesNotMatch(pattern.detail, /confirmed|reproduced/i);
+  // A control the person actually used still describes the attempt, even
+  // when a failure followed it.
+  assert.match(out.inferredIntent, /save changes/);
+  const onlyFailure = buildLiveActivity(session([
+    { type: "diagnostic", ts: 1000, url: origin, diagnostic: { kind: "http_error", message: "A request returned HTTP 500", status: 500 } }
+  ]));
+  assert.match(onlyFailure.inferredIntent, /reported a failure/);
+});
+
+test("a page-reported failure never carries a control identity or raw page text", () => {
+  const out = buildLiveActivity(session([
+    { type: "diagnostic", ts: 1000, url: origin, diagnostic: { kind: "uncaught_exception", message: "boom", source: "https://example.test/app.js", private: "page text" } }
+  ]));
+  assert.equal(out.recentEvents[0].label, "Page error: boom");
+  assert.deepEqual(Object.keys(out.recentEvents[0]).sort(), ["label", "seq", "ts", "type", "url"].sort());
+  assert.doesNotMatch(JSON.stringify(out), /page text/);
+});
+
+test("a click on an element that is not a control is a hypothesis, not a confirmed defect", () => {
+  const out = buildLiveActivity(session([
+    event("click", 1000, { tag: "button", id: "save", label: "Save" }),
+    { type: "click", ts: 1200, url: origin, target: { tag: "div", id: "tile", inert: true } }
+  ]));
+  const pattern = out.patterns.find((item) => item.kind === "non_control_click");
+  assert.ok(pattern);
+  assert.deepEqual(pattern.evidence, [2]);
+  assert.equal(pattern.hypothesis, true);
+  assert.match(pattern.detail, /never marked as a control/);
+  assert.match(pattern.detail, /No failure is verified/);
+});
+
 test("absent or non-consented captures expose no activity", () => {
   for (const value of [null, undefined, {}, false, "capture", session([], { consent: false }), session([], { consent: "true" })]) assert.equal(buildLiveActivity(value), null);
 });
@@ -321,10 +367,11 @@ test("cached patterns remain qualified and reference only existing visible evide
   const template = input.patterns[0];
   input.patterns = [null, { ...template, evidence: [1, 1, 3, 999, "2"], target: "private" }, { ...template, hypothesis: false }, { ...template, evidence: [2] }];
   const out = sanitizeLiveActivity(input);
-  assert.equal(out.patterns.length, 1);
+  assert.equal(out.patterns.length, 2);
   assert.deepEqual(out.patterns[0].evidence, [1, 3]);
   assert.equal(out.patterns[0].hypothesis, true);
   assert.equal(out.patterns[0].target, undefined);
+  assert.deepEqual(out.patterns[1].evidence, [2]);
   input.patterns = [{ ...template, kind: "verified_bug" }, { ...template, evidence: [999] }];
   assert.deepEqual(sanitizeLiveActivity(input).patterns, []);
 });

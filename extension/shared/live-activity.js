@@ -1,8 +1,10 @@
+import { DIAGNOSTIC_KINDS } from "./constants.js";
 import { sanitizeCaptureEvent, sanitizeText, sanitizeUrl } from "./redaction.js";
 
 const SOURCE_WINDOW = 30;
 const VISIBLE_EVENTS = 12;
-const EVENT_TYPES = new Set(["click", "change", "submit", "navigation"]);
+const MAX_PATTERNS = 5;
+const EVENT_TYPES = new Set(["click", "change", "submit", "navigation", "diagnostic"]);
 
 // Stored sessions are normally structured-cloned data. Do not invoke getters
 // or coercion hooks when examining malformed/restored state either.
@@ -24,9 +26,43 @@ function timestamp(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 8.64e15 ? value : null;
 }
 
+/**
+ * Project a page failure into the bounded live view.
+ *
+ * A failure is what the page itself reported. It is shown as an observation of
+ * the page's error stream, never as a confirmed defect, and it carries no
+ * control identity.
+ */
+function projectDiagnostic(raw, seq) {
+  const diagnostic = field(raw, "diagnostic");
+  const kind = text(field(diagnostic, "kind"), 40);
+  if (!DIAGNOSTIC_KINDS.has(kind)) return null;
+  const message = text(field(diagnostic, "message"), 300);
+  const source = url(field(diagnostic, "source"));
+  const status = field(diagnostic, "status");
+  const payload = { type: "diagnostic", url: url(field(raw, "url")), diagnostic: { kind } };
+  if (message) payload.diagnostic.message = message;
+  if (source) payload.diagnostic.source = source;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) payload.diagnostic.status = status;
+  const clean = sanitizeCaptureEvent(payload, timestamp(field(raw, "ts")));
+  if (!clean) return null;
+  const labels = {
+    uncaught_exception: `Page error: ${message || "an uncaught exception was reported"}`,
+    unhandled_rejection: `Unhandled page rejection: ${message || "the page left a rejection unhandled"}`,
+    http_error: `Request failed: HTTP ${clean.diagnostic.status}${source ? " at " + source : ""}`,
+    resource_error: `A resource failed to load${source ? ": " + source : ""}`
+  };
+  return {
+    public: { seq, ts: clean.ts, type: "diagnostic", label: text(labels[kind], 140), url: clean.url },
+    control: {},
+    identity: ""
+  };
+}
+
 function projectEvent(raw, seq) {
   const type = field(raw, "type");
   if (!EVENT_TYPES.has(type)) return null;
+  if (type === "diagnostic") return projectDiagnostic(raw, seq);
   const target = field(raw, "target");
   const safeTarget = {};
   for (const key of ["tag", "role", "id", "type", "dataTab", "dataTicket", "label"]) {
@@ -34,6 +70,8 @@ function projectEvent(raw, seq) {
     if (value) safeTarget[key] = value;
   }
   safeTarget.href = url(field(target, "href"));
+  // A click on an element the page never marked as a control.
+  if (field(target, "inert") === true) safeTarget.inert = true;
   // Reuse the capture allowlist: input labels, values, typed keys and arbitrary
   // target properties must not become a second, less-private capture channel.
   const clean = sanitizeCaptureEvent({ type, url: url(field(raw, "url")), target: safeTarget }, timestamp(field(raw, "ts")));
@@ -86,6 +124,42 @@ function repeatPattern(events, type) {
   return null;
 }
 
+/**
+ * Surface the page's own reported failures.
+ *
+ * The page's error stream is evidence about the page, not proof that the
+ * person hit that defect. The wording keeps that difference visible.
+ */
+function errorPattern(events) {
+  const failures = events.filter((event) => event.public.type === "diagnostic");
+  if (!failures.length) return null;
+  return {
+    kind: "page_error",
+    title: failures.length === 1 ? "The page reported a failure" : `The page reported ${failures.length} failures`,
+    detail: "The page's own error stream reported a failure during this capture. It is an observation of what the page said, not a verified defect and not a reproduction.",
+    evidence: failures.map((event) => event.public.seq),
+    hypothesis: true
+  };
+}
+
+/**
+ * Surface clicks that landed on something the page never marked as a control.
+ *
+ * The element looked interactive to the person, so the control may be missing
+ * a role or an accessible name. The wording keeps that a possibility.
+ */
+function nonControlPattern(events) {
+  const inert = events.filter((event) => event.public.type === "click" && event.control.inert === true);
+  if (!inert.length) return null;
+  return {
+    kind: "non_control_click",
+    title: "Clicked an element that is not a control",
+    detail: `${inert.length} click(s) landed on an element the page never marked as a control, although it presented itself as interactive. The control may be missing a role or an accessible name, or the click may have had no effect. No failure is verified.`,
+    evidence: inert.map((event) => event.public.seq),
+    hypothesis: true
+  };
+}
+
 function navigationPattern(events) {
   const navigations = events.filter((event) => event.public.type === "navigation" && event.public.url);
   for (let end = navigations.length - 1; end >= 2; end--) {
@@ -123,6 +197,7 @@ function intent(events) {
   const latest = events.at(-1)?.public.type;
   if (latest === "navigation") return "Tentative interpretation: exploring a page or moving between views. The intended task is not yet clear.";
   if (latest === "change") return "Tentative interpretation: adjusting a field. Its value and the intended outcome are not captured.";
+  if (latest === "diagnostic") return "Tentative interpretation: the page reported a failure during this capture. The intended task is not yet clear.";
   if (latest === "click") return "A control was clicked, but there is not enough evidence to infer the intended task.";
   return "Waiting for consented interactions before inferring a task.";
 }
@@ -155,7 +230,7 @@ export function buildLiveActivity(session) {
       recentEvents,
       summary: latest ? text(`${latest.label}. ${eventCount} captured event${eventCount === 1 ? "" : "s"} in this session. Outcomes are not verified.`, 300) : "No page interactions have been captured yet.",
       inferredIntent: intent(visible),
-      patterns: [repeatPattern(visible, "click"), navigationPattern(visible), repeatPattern(visible, "change")].filter(Boolean),
+      patterns: [errorPattern(visible), nonControlPattern(visible), repeatPattern(visible, "click"), navigationPattern(visible), repeatPattern(visible, "change")].filter(Boolean),
       source: "rules",
       windowStartSeq: recentEvents[0]?.seq || 0
     };
@@ -189,8 +264,8 @@ export function sanitizeLiveActivity(value) {
     const visible = new Set(recentEvents.map((event) => event.seq));
     const rawPatterns = field(value, "patterns");
     const patterns = [];
-    const patternKinds = new Set(["repeated_clicks", "repeated_changes", "navigation_loop"]);
-    const patternCount = Array.isArray(rawPatterns) ? Math.min(field(rawPatterns, "length"), 3) : 0;
+    const patternKinds = new Set(["page_error", "non_control_click", "repeated_clicks", "repeated_changes", "navigation_loop"]);
+    const patternCount = Array.isArray(rawPatterns) ? Math.min(field(rawPatterns, "length"), MAX_PATTERNS) : 0;
     for (let i = 0; i < patternCount; i++) {
       const raw = field(rawPatterns, String(i));
       const kind = field(raw, "kind");

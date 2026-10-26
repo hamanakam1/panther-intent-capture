@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Panther Intent Capture",
-  "version": "1.5.0",
+  "version": "1.7.0",
   "description": "Capture chosen-page interactions locally and generate reviewable improvement tickets.",
   "minimum_chrome_version": "116",
   "permissions": [

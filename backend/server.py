@@ -136,7 +136,7 @@ def main(argv=None):
    │                                 │
    └─────────────────────────────────┘
 
-panther-intent-capture backend  v1.5.0   listening on http://{HOST}:{PORT}
+panther-intent-capture backend  v1.7.0   listening on http://{HOST}:{PORT}
 local capture  •  explicit consent  •  reviewable drafts  •  optional unredacted screenshots
     """.format(HOST=HOST, PORT=PORT))
     start_worker()

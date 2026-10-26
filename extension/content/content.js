@@ -3,11 +3,21 @@
   if (globalThis.__pantherCaptureInstalled) return;
   globalThis.__pantherCaptureInstalled = true;
   let sessionId = null;
+  let diagnosticNonce = "";
+  let captureStartMs = 0;
   let lastUrl = "";
   let routeTimer = null;
   let statusTimer = null;
   let panel = null;
   let statusText, detailsText, stopButton, reviewButton;
+
+  // Page-failure channels. These mirror the extension's shared allowlist and
+  // the backend's copy; a new kind needs all three plus a parity update.
+  const DIAGNOSTIC_KINDS = new Set(["uncaught_exception", "unhandled_rejection", "http_error", "resource_error"]);
+  const RESOURCE_TAGS = new Set(["img", "script", "link", "iframe", "source", "video", "audio", "embed", "object"]);
+  const MAX_DIAGNOSTICS = 50;
+  let diagnosticsReported = 0;
+  let diagnosticsStarted = false;
 
   function safeUrl(value) {
     try {
@@ -21,10 +31,50 @@
     } catch { return ""; }
   }
 
+  // Controls Panther recognises, and the wider set it still describes.
+  const CONTROLS = "button,a,input,select,textarea,[role=button],[role=tab],[data-tab],[data-ticket]";
+  const SEMANTIC = CONTROLS + ",form";
+
+  /**
+   * Does an element present itself as interactive?
+   *
+   * A click that lands on something the page never marked as a control is
+   * worth recording when the element still looks interactive to the person:
+   * it declares a role, it is focusable, or it is styled as a pointer. An
+   * ordinary click on empty space is not evidence of anything and is left
+   * out.
+   */
+  function presentsAsInteractive(element) {
+    if (!element || typeof element.getAttribute !== "function") return false;
+    try {
+      if (element.getAttribute("role")) return true;
+      if (typeof element.hasAttribute === "function" && element.hasAttribute("tabindex")) return true;
+      if (typeof getComputedStyle === "function") return getComputedStyle(element).cursor === "pointer";
+    } catch { /* A detached or replaced element cannot be inspected. */ }
+    return false;
+  }
+
   function send(type, target = null) {
     if (!sessionId) return;
-    const semantic = target?.closest?.("button,a,input,select,textarea,form,[role=button],[role=tab],[data-tab],[data-ticket]");
-    if (target && !semantic) return;
+    const control = target?.closest?.(CONTROLS);
+    const semantic = control || target?.closest?.("form");
+    if (target && !semantic) {
+      // The click landed on something that is not a control. Record it only
+      // when the element presents itself as interactive.
+      if (type === "click" && presentsAsInteractive(target)) {
+        const element = target;
+        chrome.runtime.sendMessage({ type: "page.interaction", sessionId, payload: {
+          type: "click", ts: Date.now(), url: safeUrl(location.href),
+          target: {
+            tag: String(element.tagName || "").toLowerCase().slice(0, 40),
+            role: element.getAttribute("role") || "",
+            id: element.id || "",
+            inert: true
+          }
+        } }).catch(() => { /* The background may have gone away; the page keeps working. */ });
+      }
+      return;
+    }
     const payload = { type, ts: Date.now(), url: safeUrl(location.href) };
     if (semantic) {
       const tag = semantic.tagName.toLowerCase();
@@ -39,6 +89,8 @@
         dataTab: semantic.getAttribute("data-tab") || "",
         dataTicket: semantic.getAttribute("data-ticket") || ""
       };
+      // The click landed on something the page never marked as a control.
+      if (!control && type === "click" && presentsAsInteractive(target)) payload.target.inert = true;
     }
     chrome.runtime.sendMessage({ type: "page.interaction", sessionId, payload }).then((reply) => {
       if (!reply?.ok) {
@@ -56,8 +108,110 @@
     }
   }
 
+  /**
+   * Report a page failure the page itself disclosed.
+   *
+   * These are observations, not proof that a defect exists. Nothing here reads
+   * page body text, input values or typed keys: a failure carries a bounded
+   * message, a sanitized URL and, for HTTP failures, a status code.
+   */
+  function reportDiagnostic(detail, startedAt) {
+    if (!sessionId || !detail || typeof detail !== "object") return;
+    if (diagnosticsReported >= MAX_DIAGNOSTICS) return;
+    const kind = typeof detail.kind === "string" ? detail.kind : "";
+    if (!DIAGNOSTIC_KINDS.has(kind)) return;
+    const diagnostic = { kind };
+    if (typeof detail.message === "string") diagnostic.message = detail.message.slice(0, 300);
+    if (typeof detail.source === "string") diagnostic.source = detail.source.slice(0, 2000);
+    if (Number.isInteger(detail.status)) diagnostic.status = detail.status;
+    if (Number.isInteger(detail.line)) diagnostic.line = detail.line;
+    if (Number.isInteger(detail.column)) diagnostic.column = detail.column;
+    diagnosticsReported++;
+    chrome.runtime.sendMessage({
+      type: "page.diagnostic",
+      sessionId,
+      payload: {
+        type: "diagnostic",
+        ts: Number.isFinite(startedAt) && startedAt > 0 ? startedAt : Date.now(),
+        url: safeUrl(location.href),
+        diagnostic
+      }
+    }).catch(() => { /* The background may have gone away; the page keeps working. */ });
+  }
+
+  /**
+   * Listen for the failures this page can disclose without being modified.
+   *
+   * The page's own uncaught exceptions and unhandled rejections arrive through
+   * a main-world relay installed by the background, because an isolated world
+   * cannot observe them. Failed subresources and HTTP error responses are
+   * observed here directly.
+   */
+  function startDiagnostics() {
+    // Listeners live for the life of this document. A second capture on the
+    // same page reuses them instead of reporting each failure twice.
+    if (diagnosticsStarted) return;
+    diagnosticsStarted = true;
+    // A subresource that failed to load reports on its own element.
+    document.addEventListener("error", (event) => {
+      const target = event.target;
+      if (!target || target === window || typeof target.tagName !== "string") return;
+      const tag = target.tagName.toLowerCase();
+      if (!RESOURCE_TAGS.has(tag)) return;
+      reportDiagnostic({
+        kind: "resource_error",
+        message: `A ${tag} resource failed to load`,
+        source: typeof target.src === "string" ? target.src : typeof target.href === "string" ? target.href : ""
+      });
+    }, true);
+
+    // The main-world relay reports the page's own uncaught failures. The
+    // session nonce separates Panther's relay from any other listener.
+    document.addEventListener("panther-diagnostic", (event) => {
+      const detail = event.detail;
+      if (!detail || typeof detail !== "object") return;
+      if (detail.nonce !== diagnosticNonce || !diagnosticNonce) return;
+      reportDiagnostic({
+        kind: detail.kind,
+        message: detail.message,
+        source: detail.source,
+        status: detail.status,
+        line: detail.line,
+        column: detail.column
+      });
+    });
+
+    // Requests the page made that returned an HTTP error status. A response
+    // without a readable status is not reported: an opaque cross-origin
+    // response and a cached response are not failures.
+    //
+    // The buffered entries include failures that happened before the capture
+    // began. Those are outside the consented window, so they are left out,
+    // and the ones that are kept carry their own real time so the recorded
+    // timeline stays truthful.
+    try {
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          const status = entry.responseStatus;
+          if (!Number.isInteger(status) || status < 400 || status > 599) continue;
+          const startedAt = performance.timeOrigin + entry.startTime;
+          if (!Number.isFinite(startedAt)) continue;
+          if (captureStartMs && startedAt + 500 < captureStartMs) continue;
+          reportDiagnostic({
+            kind: "http_error",
+            message: `A request returned HTTP ${status}`,
+            source: entry.name,
+            status
+          }, startedAt);
+        }
+      });
+      observer.observe({ type: "resource", buffered: true });
+    } catch { /* Resource timing is unavailable in this browser. */ }
+  }
+
   function stopListening() {
     sessionId = null;
+    diagnosticNonce = "";
     clearInterval(routeTimer);
     routeTimer = null;
   }
@@ -135,16 +289,20 @@
     statusTimer = setInterval(refreshStatus, 1000);
   }
 
-  function enable(id, automationEnabled = false) {
+  function enable(id, automationEnabled = false, nonce = "", startedAt = 0) {
     if (sessionId === id) return;
     stopListening();
     sessionId = id;
+    diagnosticNonce = typeof nonce === "string" ? nonce : "";
+    captureStartMs = Number.isFinite(startedAt) && startedAt > 0 ? startedAt : 0;
+    diagnosticsReported = 0;
     lastUrl = location.href;
     showPanel();
     stopButton.textContent = automationEnabled ? "Stop & deliver" : "Stop & generate";
     // pushState is not observable from an isolated content world. Poll only
     // during active capture to include SPA routers and dashboard hash routes.
     routeTimer = setInterval(routeChanged, 500);
+    startDiagnostics();
     send("navigation");
   }
 
@@ -158,7 +316,7 @@
   // Every event is sent immediately, with no unload-time batch or Blob message.
   chrome.runtime.onMessage.addListener((message, _sender, reply) => {
     if (message.type === "extension.captureStart") {
-      enable(message.sessionId, message.automationEnabled === true);
+      enable(message.sessionId, message.automationEnabled === true, message.diagnosticNonce, message.captureStartMs);
       reply({ ok: true });
     } else if (message.type === "extension.captureStop") {
       stopListening();

@@ -16,6 +16,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 import storage
 import automation
+import integrations
+import destinations
 from api import routes
 from server import Handler
 from tickets import DraftGenerationError
@@ -95,7 +97,7 @@ class HttpTests(unittest.TestCase):
         code, exported, _ = self.request(f"/api/extension/export/{rid}")
         self.assertEqual(exported["tickets"][0]["title"], "Preserve selected tab")
         self.assertFalse(exported["authority"]["execution_authorized"])
-        with patch.object(routes, "submit_ticket") as submit, patch.dict("os.environ", {"PANTHER_DASHBOARD_URL": "http://127.0.0.1:8080"}):
+        with patch.object(destinations, "submit") as submit, patch.dict("os.environ", {"PANTHER_DASHBOARD_URL": "http://127.0.0.1:8080"}):
             code, preview, _ = self.request(f"/api/extension/integrations/ticket-service/preview/{rid}", body)
             self.assertEqual(code, 200, preview)
             self.assertIn("no-auto", preview["payload"]["tags"])
@@ -108,12 +110,127 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(code, 200, delivered)
             submit.assert_called_once()
 
+    def test_successive_review_edits_persist_and_survive_repeated_regeneration(self):
+        rid = self.record()
+        _, drafts, _ = self.request(f"/api/extension/tickets/{rid}", {"use_ai": False})
+        ticket_id = drafts["tickets"][0]["id"]
+        patches = [
+            {"title": "First reviewed title", "description": "First explanation", "acceptance_criteria": ["First expected result"]},
+            {"title": "Latest reviewed title", "description": "Updated explanation", "acceptance_criteria": ["Latest expected result"]},
+        ]
+        for reviewed in patches:
+            code, saved, _ = self.request(f"/api/extension/tickets/{rid}/review", {"ticket_id": ticket_id, "patch": reviewed})
+            self.assertEqual(code, 200, saved)
+            code, exported, _ = self.request(f"/api/extension/export/{rid}")
+            self.assertEqual(code, 200, exported)
+            for field, value in reviewed.items():
+                self.assertEqual(saved["ticket"][field], value)
+                self.assertEqual(exported["tickets"][0][field], value)
+            stored = json.loads((storage.ROOT / "tickets" / f"{rid}.json").read_text())
+            for field, value in reviewed.items():
+                self.assertEqual(stored["data"]["tickets"][0][field], value)
+                self.assertEqual(stored["modes"]["observed"]["tickets"][0][field], value)
+        # A producer revision change forces real regeneration instead of cached reuse.
+        # Do it twice: the review marker must survive the first regeneration too.
+        import tickets
+        baseline_revision = tickets.GENERATION_REVISION
+        for generation_revision in (baseline_revision + 1, baseline_revision + 2):
+            with patch.object(tickets, "GENERATION_REVISION", generation_revision):
+                code, regenerated, _ = self.request(f"/api/extension/tickets/{rid}", {"use_ai": False})
+                self.assertEqual(code, 200, regenerated)
+                self.assertFalse(regenerated["cached"])
+                self.assertEqual(regenerated["generation_revision"], generation_revision)
+                for field, value in patches[-1].items():
+                    self.assertEqual(regenerated["tickets"][0][field], value)
+                self.assertEqual(regenerated["tickets"][0]["reviewed"], patches[-1])
+                _, exported, _ = self.request(f"/api/extension/export/{rid}")
+                self.assertEqual(exported["tickets"][0]["title"], patches[-1]["title"])
+
+    def test_page_reported_failures_are_readable_and_never_verified(self):
+        capture = {**self.capture, "events": [
+            {"type": "click", "ts": 1700000001000, "target": {"tag": "button", "label": "Save"}},
+            {"type": "diagnostic", "ts": 1700000001200, "url": "http://127.0.0.1:8080/page",
+             "diagnostic": {"kind": "http_error", "message": "A request returned HTTP 500",
+                            "source": "http://127.0.0.1:8080/api/tickets?token=secret", "status": 500}},
+            {"type": "diagnostic", "ts": 1700000001300, "url": "http://127.0.0.1:8080/page",
+             "diagnostic": {"kind": "uncaught_exception", "message": "TypeError: x is not a function",
+                            "source": "http://127.0.0.1:8080/app.js", "line": 12}},
+        ]}
+        code, receipt, _ = self.request("/api/extension/record", capture)
+        self.assertEqual(code, 201, receipt)
+        rid = receipt["id"]
+        code, record, _ = self.request(f"/api/extension/recordings/{rid}")
+        self.assertEqual(record["diagnostic_count"], 2)
+        code, report, _ = self.request(f"/api/extension/recordings/{rid}/diagnostics")
+        self.assertEqual(code, 200, report)
+        self.assertEqual(report["count"], 2)
+        self.assertEqual(report["kinds"], {"http_error": 1, "uncaught_exception": 1})
+        self.assertIn("HTTP 500", report["failures"][0]["summary"])
+        self.assertIn("not verified defects", report["interpretation"])
+        self.assertNotIn("secret", json.dumps(report))
+        code, drafts, _ = self.request(f"/api/extension/tickets/{rid}", {"use_ai": False})
+        self.assertEqual(code, 200, drafts)
+        draft = drafts["tickets"][0]
+        self.assertEqual(len(draft["diagnostics"]), 2)
+        self.assertIn("Page-reported failures", draft["description"])
+        self.assertNotIn("secret", json.dumps(draft))
+
+    def test_the_replay_plan_describes_the_path_and_never_authorizes_execution(self):
+        rid = self.record()
+        code, plan, _ = self.request(f"/api/extension/recordings/{rid}/replay")
+        self.assertEqual(code, 200, plan)
+        self.assertEqual(plan["schema_version"], "1.0")
+        self.assertEqual(plan["authority"], {"export_only": True, "requires_review": True, "execution_authorized": False})
+        self.assertFalse(plan["limits"]["values_captured"])
+        self.assertFalse(plan["limits"]["executed_by_producer"])
+        self.assertNotIn("secret", json.dumps(plan))
+        code, script, _ = self.request(f"/api/extension/recordings/{rid}/replay?format=playwright")
+        self.assertEqual(code, 200)
+        self.assertIn(b"Panther never runs it", script)
+        self.assertNotIn(b"secret", script)
+
+    def test_the_destination_catalogue_lists_every_destination(self):
+        code, catalogue, _ = self.request("/api/extension/integrations")
+        self.assertEqual(code, 200, catalogue)
+        kinds = [entry["kind"] for entry in catalogue["destinations"]]
+        self.assertIn("ticket-service", kinds)
+        self.assertIn("github", kinds)
+        for entry in catalogue["destinations"]:
+            self.assertIn("configured", entry)
+            self.assertNotIn("token", json.dumps(entry).lower())
+
+    def test_an_unknown_destination_is_refused_before_any_request(self):
+        code, _, _ = self.request("/api/extension/integrations/not-a-destination")
+        self.assertEqual(code, 404)
+        rid = self.record()
+        code, _, _ = self.request(f"/api/extension/integrations/not-a-destination/preview/{rid}", {"ticket_id": "x"})
+        self.assertEqual(code, 404)
+
     def test_parallel_uploads_share_one_receipt(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             results = list(pool.map(lambda _: self.request("/api/extension/record", self.capture), range(4)))
         self.assertEqual(len({data["id"] for _, data, _ in results}), 1)
         self.assertEqual(sorted(code for code, _, _ in results), [200, 200, 200, 201])
         self.assertEqual(len(storage.list_recordings()), 1)
+
+    def test_health_advertises_the_capabilities_and_the_export_contract_version(self):
+        code, health, _ = self.request("/api/extension/health")
+        self.assertEqual(code, 200)
+        self.assertEqual(health["status"], "ok")
+        self.assertIn("diagnostics", health["capabilities"])
+        self.assertIn("review-edit-persistence", health["capabilities"])
+        self.assertIn("intent-bundle-1.2", health["capabilities"])
+        self.assertRegex(health["app_version"], r"^\d+\.\d+\.\d+$")
+        self.assertEqual(health["bundle_schema_version"], integrations.SCHEMA_VERSION)
+        self.assertRegex(health["schema_version"], r"^\d+\.\d+$")
+
+    def test_health_version_is_loaded_once_and_status_has_no_mutation(self):
+        before = storage.list_recordings()
+        with patch.object(Path, "read_text", side_effect=AssertionError("health must not reread source files")):
+            code, health, _ = self.request("/api/extension/health")
+        self.assertEqual(code, 200)
+        self.assertEqual(health["app_version"], routes.APP_VERSION)
+        self.assertEqual(storage.list_recordings(), before)
 
     def test_consent_and_malformed_inputs_are_rejected(self):
         for changes in ({"consent": False}, {"events": {}}, {"sessionId": ""}, {"startTime": -1},

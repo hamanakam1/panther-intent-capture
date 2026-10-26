@@ -1,4 +1,4 @@
-import { REDACT_FIELD_NAMES, REDACT_FIELD_IDS } from "./constants.js";
+import { DIAGNOSTIC_KINDS, REDACT_FIELD_NAMES, REDACT_FIELD_IDS } from "./constants.js";
 
 function looksSecret(key) {
   const k = String(key).toLowerCase();
@@ -59,9 +59,58 @@ export function sanitizeText(value, max = 120) {
     .replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, max);
 }
 
+/**
+ * Build a page-failure record from an allowlist of fields.
+ *
+ * Page failures are observations the page itself reported, not proof that a
+ * defect exists. The message is the page's own error text, so it is treated as
+ * untrusted data: it is scrubbed for common secret shapes, bounded, and never
+ * read from page body text. The location is a URL, so it is sanitized like
+ * every other captured URL.
+ */
+export function sanitizeDiagnostic(payload, timestamp = Date.now()) {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload.diagnostic;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const kind = typeof raw.kind === "string" ? raw.kind : "";
+  if (!DIAGNOSTIC_KINDS.has(kind)) return null;
+  const diagnostic = { kind };
+  if (typeof raw.message === "string") {
+    const message = sanitizeText(raw.message, 300);
+    if (message.trim()) diagnostic.message = message;
+  }
+  if (typeof raw.source === "string") {
+    const source = sanitizeUrl(raw.source);
+    if (source) diagnostic.source = source;
+  }
+  if (kind === "http_error") {
+    // An HTTP failure without a readable status is not an HTTP failure. The
+    // status is what makes the record meaningful, so it is required.
+    if (!Number.isInteger(raw.status) || raw.status < 400 || raw.status > 599) return null;
+    diagnostic.status = raw.status;
+  }
+  if (kind === "uncaught_exception") {
+    for (const key of ["line", "column"]) {
+      if (Number.isInteger(raw[key]) && raw[key] >= 0 && raw[key] <= 1000000) diagnostic[key] = raw[key];
+    }
+  }
+  // A record with nothing to show is not evidence; drop it rather than
+  // delivering an empty line to a reviewer.
+  if (!diagnostic.message && !diagnostic.source && diagnostic.status === undefined) return null;
+  // A failure keeps the time it actually happened, so the recorded timeline
+  // stays truthful. The time comes from the browser's own resource timing,
+  // never from the page. It is truncated to whole milliseconds so the
+  // extension and the backend record exactly the same instant.
+  const observedAt = typeof payload.ts === "number" && Number.isFinite(payload.ts) && payload.ts > 0
+    ? Math.trunc(payload.ts) : Math.trunc(timestamp);
+  return { type: "diagnostic", ts: observedAt, url: sanitizeUrl(payload.url), diagnostic };
+}
+
 /** An allowlist, not a recursive pass-through of untrusted page payloads. */
 export function sanitizeCaptureEvent(payload, timestamp = Date.now()) {
-  if (!payload || !["click", "change", "submit", "navigation"].includes(payload.type)) return null;
+  if (!payload || typeof payload !== "object") return null;
+  if (payload.type === "diagnostic") return sanitizeDiagnostic(payload, timestamp);
+  if (!["click", "change", "submit", "navigation"].includes(payload.type)) return null;
   const event = { type: payload.type, ts: timestamp, url: sanitizeUrl(payload.url) };
   const target = payload.target;
   if (target && typeof target === "object") {
@@ -71,6 +120,9 @@ export function sanitizeCaptureEvent(payload, timestamp = Date.now()) {
     }
     if (["button", "a"].includes(target.tag) && target.label) event.target.label = sanitizeText(target.label);
     if (target.href) event.target.href = sanitizeUrl(target.href);
+    // A click on an element the page never marked as a control. Only the
+    // extension's own true flag is kept.
+    if (target.inert === true) event.target.inert = true;
   }
   return event;
 }

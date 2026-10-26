@@ -1,13 +1,16 @@
 """Secret redaction for the extension backend (defense in depth).
 
 Mirrors the extension's frontend redaction so that secrets are never
-persisted even if a client posts directly to the backend.
+persisted even if a client posts directly to the backend. The two
+implementations are held to the same behaviour by
+``tests/test_redaction_parity.py``; keep them in step.
 """
 
 from __future__ import annotations
 
 import math
 import re
+import time
 from typing import Any
 from urllib.parse import unquote, urlsplit, urlunsplit
 
@@ -24,6 +27,26 @@ REDACT_FIELD_IDS = {
 _SECRET_PATTERNS = [
     re.compile(r"secret|token|key|pass|cred|auth|cookie", re.IGNORECASE),
 ]
+# URL rules also treat a session segment as secret: the extension redacts the
+# path segment after a session-like part, because a session identifier is a
+# credential in disguise. Field names keep the narrower rule, so a field called
+# "session_count" stays readable.
+_URL_SECRET_PATTERNS = [
+    re.compile(r"secret|token|key|pass|cred|auth|cookie|session", re.IGNORECASE),
+]
+
+# Page-failure channels. This mirrors the extension's DIAGNOSTIC_KINDS set
+# exactly; a new kind needs a matching change in the extension and a
+# redaction-parity update.
+DIAGNOSTIC_KINDS = {
+    "uncaught_exception",
+    "unhandled_rejection",
+    "http_error",
+    "resource_error",
+}
+MAX_DIAGNOSTIC_MESSAGE = 300
+MAX_DIAGNOSTIC_SOURCE = 1000
+MAX_DIAGNOSTIC_POSITION = 1000000
 
 
 def sanitize_url(value: Any) -> str:
@@ -39,22 +62,22 @@ def sanitize_url(value: Any) -> str:
             host = f"[{host}]"
         if parsed.port:
             host += f":{parsed.port}"
-        fragment = parsed.fragment if re.fullmatch(r"/?[A-Za-z][A-Za-z0-9_/-]{0,99}", parsed.fragment) else ""
+        fragment = parsed.fragment if re.fullmatch(r"/?[A-Za-z][A-Za-z0-9_/-]{0,100}", parsed.fragment) else ""
         parts = parsed.path.split("/")
-        path = "/".join("REDACTED" if len(part) > 48 or (index and _looks_secret(unquote(parts[index - 1])))
+        path = "/".join("REDACTED" if len(part) > 48 or (index and _looks_secret(unquote(parts[index - 1]), _URL_SECRET_PATTERNS))
                         else part for index, part in enumerate(parts))
-        if _looks_secret(fragment):
+        if _looks_secret(fragment, _URL_SECRET_PATTERNS):
             fragment = ""
         return urlunsplit((parsed.scheme, host, path, "", fragment))[:1000]
     except ValueError:
         return ""
 
 
-def _looks_secret(key: str) -> bool:
+def _looks_secret(key: str, patterns: list[re.Pattern[str]] | None = None) -> bool:
     k = str(key).lower()
     if k in REDACT_FIELD_NAMES or k in REDACT_FIELD_IDS:
         return True
-    return any(p.search(k) for p in _SECRET_PATTERNS)
+    return any(p.search(k) for p in (patterns or _SECRET_PATTERNS))
 
 
 def _scrub_value(value: Any) -> Any:
@@ -97,25 +120,101 @@ def sanitize_text(value: Any, limit: int = 120) -> str:
     return re.sub(r"[\x00-\x1f\x7f]", " ", text)[:limit]
 
 
-def sanitize_capture_event(payload: Any) -> Any:
-    """Retain semantic interactions only; never typed keys, values or page text."""
-    if not isinstance(payload, dict) or payload.get("type") not in ("click", "change", "submit", "navigation"):
+def _event_timestamp(value: Any) -> int:
+    """The event timestamp, defaulting to now like the extension does.
+
+    An event without a usable timestamp still has to carry one: the ticket
+    references and the model's relative timing read it. Dropping it would make
+    evidence disappear from the reproduction steps.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return int(value)
+    return int(time.time() * 1000)
+
+
+def sanitize_diagnostic(payload: Any, timestamp: int) -> Any:
+    """Retain a page-reported failure from an allowlist of fields.
+
+    A failure is what the page itself reported. The message is the page's own
+    error text, so it is treated as untrusted data: scrubbed for common secret
+    shapes and bounded. The location is a URL and is sanitized like every other
+    captured URL. Nothing here reads page body text or typed values.
+    """
+    if not isinstance(payload, dict):
         return None
-    event = {"type": payload["type"], "url": sanitize_url(payload.get("url"))}
-    timestamp = payload.get("ts")
-    if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool) and math.isfinite(timestamp):
-        event["ts"] = timestamp
+    raw = payload.get("diagnostic")
+    if not isinstance(raw, dict):
+        return None
+    kind = raw.get("kind")
+    if not isinstance(kind, str) or kind not in DIAGNOSTIC_KINDS:
+        return None
+    diagnostic: dict[str, Any] = {"kind": kind}
+    message = raw.get("message")
+    if isinstance(message, str):
+        cleaned = sanitize_text(message, MAX_DIAGNOSTIC_MESSAGE)
+        if cleaned.strip():
+            diagnostic["message"] = cleaned
+    source = raw.get("source")
+    if isinstance(source, str):
+        cleaned = sanitize_url(source[:MAX_DIAGNOSTIC_SOURCE])
+        if cleaned:
+            diagnostic["source"] = cleaned
+    status = raw.get("status")
+    if kind == "http_error":
+        # An HTTP failure without a readable status is not an HTTP failure.
+        # The status is what makes the record meaningful, so it is required.
+        if not isinstance(status, int) or isinstance(status, bool) or not 400 <= status <= 599:
+            return None
+        diagnostic["status"] = status
+    if kind == "uncaught_exception":
+        for key in ("line", "column"):
+            value = raw.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_DIAGNOSTIC_POSITION:
+                diagnostic[key] = value
+    # A record with nothing to show is not evidence; drop it rather than
+    # delivering an empty line to a reviewer.
+    if not diagnostic.get("message") and not diagnostic.get("source") and "status" not in diagnostic:
+        return None
+    return {"type": "diagnostic", "ts": timestamp, "url": sanitize_url(payload.get("url")), "diagnostic": diagnostic}
+
+
+def sanitize_capture_event(payload: Any) -> Any:
+    """Retain semantic interactions only; never typed keys, values or page text.
+
+    The allowlist mirrors the extension exactly: a label is only kept when the
+    extension would have sent one, and page text is never read from a
+    ``text`` field, because the extension never sends one.
+    """
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("type") == "diagnostic":
+        return sanitize_diagnostic(payload, _event_timestamp(payload.get("ts")))
+    if payload.get("type") not in ("click", "change", "submit", "navigation"):
+        return None
+    event = {
+        "type": payload["type"],
+        "ts": _event_timestamp(payload.get("ts")),
+        "url": sanitize_url(payload.get("url")),
+    }
     target = payload.get("target")
     if isinstance(target, dict):
         semantic = {}
         for key in ("tag", "role", "id", "type", "dataTab", "dataTicket"):
-            if isinstance(target.get(key), str):
-                semantic[key] = sanitize_text(target[key])
+            value = target.get(key)
+            if isinstance(value, str) and value:
+                semantic[key] = sanitize_text(value)
         tag = semantic.get("tag", "").lower()
         if tag in ("button", "a"):
-            semantic["label"] = sanitize_text(target.get("label") or target.get("text"))
-        if "href" in target:
-            semantic["href"] = sanitize_url(target["href"])
+            label = target.get("label")
+            if isinstance(label, str) and label:
+                semantic["label"] = sanitize_text(label)
+        href = target.get("href")
+        if isinstance(href, str) and href:
+            semantic["href"] = sanitize_url(href)
+        # A click on an element the page never marked as a control. Only the
+        # extension's own true flag is kept.
+        if target.get("inert") is True:
+            semantic["inert"] = True
         event["target"] = semantic
     return event
 

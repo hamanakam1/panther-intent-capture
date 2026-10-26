@@ -163,7 +163,7 @@ test("live projection bounds rows and text and drops unsupported evidence refere
   assert.equal(live.summary.length, 600);
   assert.equal(live.recentEvents.length, 12);
   assert.equal(live.recentEvents[0].label.length, 240);
-  assert.equal(live.patterns.length, 3);
+  assert.equal(live.patterns.length, 5);
   assert.equal(live.patterns[0].detail.length, 300);
   assert.deepEqual(live.patterns[0].evidence, [1, 3]);
   input.live.patterns = [{title: "Unsupported finding", evidence: [999]}];

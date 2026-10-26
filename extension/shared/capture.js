@@ -19,8 +19,47 @@ const SCREENSHOT_COOLDOWN_MS = 3000;
 const HEADERS = { "Content-Type": "application/json", "X-Panther-Client": "extension-v1" };
 const MONITOR_COMMANDS = new Set(["extension.getStatus", "extension.stopRecording", "extension.cancelAutomation", "extension.openReview", "extension.analyzeLive", "extension.cancelLiveAnalysis"]);
 
+/**
+ * Install the main-world relay that reports the page's own uncaught failures.
+ *
+ * An isolated world cannot observe the page's uncaught exceptions or
+ * unhandled rejections, so this small relay is injected into the page's world.
+ * It forwards a bounded message and a location only. It never reads page
+ * text, input values or typed keys, and it holds no extension privilege: the
+ * page can already say anything it likes in its own error stream, so Panther
+ * treats what arrives here as an observation and never as a verified defect.
+ */
+export function pantherDiagnosticRelay(nonce) {
+  if (!nonce || typeof nonce !== "string") return;
+  const guard = "__pantherDiagnostic" + nonce;
+  if (globalThis[guard]) return;
+  globalThis[guard] = true;
+  const relay = (kind, payload) => {
+    try {
+      document.dispatchEvent(new CustomEvent("panther-diagnostic", { detail: { nonce, kind, ...payload } }));
+    } catch { /* The page changed under us; capture continues without it. */ }
+  };
+  globalThis.addEventListener("error", (event) => {
+    relay("uncaught_exception", {
+      message: String(event.message || ""),
+      source: String(event.filename || ""),
+      line: Number.isInteger(event.lineno) ? event.lineno : 0,
+      column: Number.isInteger(event.colno) ? event.colno : 0
+    });
+  });
+  globalThis.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    relay("unhandled_rejection", {
+      message: String((reason && reason.message) || reason || ""),
+      source: ""
+    });
+  });
+}
+
 /** Persist before acknowledging: a Chromium service worker can stop at any time. */
 export function createCaptureController(api, fetcher, now = Date.now, { isPowered = () => false } = {}) {
+  // Snapshotted by this worker, not inferred from newly hot-served UI assets.
+  const worker = {capture_contract: 2, app_version: api.runtime.getManifest?.().version || "unknown"};
   let queue = Promise.resolve();
   let pollQueued = false;
   let frozen = false;
@@ -87,13 +126,17 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       await api.action.setBadgeBackgroundColor({ tabId: session.tabId, color: session.status === "recording" ? "#dc2626" : "#b45309" });
     } catch { /* The captured tab may have been closed. */ }
   };
-  const status = async (includeLive = false) => {
+  const status = async (includeLive = false, includeGoal = false) => {
     const session = await read(SESSION_KEY);
     const settings = await read(SETTINGS_KEY) || {};
     const result = await read(RESULT_KEY) || null;
     // The page panel never receives the goal, action feed or live interpretation.
     const publicResult = result ? { ...result } : null;
-    if (publicResult) delete publicResult.live;
+    if (publicResult) {
+      delete publicResult.live;
+      delete publicResult.goal;
+      if (includeGoal) publicResult.goal = sanitizeText(result.live?.goal || "", 1000);
+    }
     return {
       ok: true, enabled: settings.enabled === true,
       status: session?.status || result?.status || "idle",
@@ -101,6 +144,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
         sessionId: session.sessionId, tabId: session.tabId, startTime: session.startTime,
         eventCount: session.events.length, screenshotCount: session.screenshots.length,
         screenshotsConsent: session.screenshotConsent === true,
+        ...(includeGoal ? {goal: sanitizeText(session.goal || "", 1000)} : {}),
         error: session.error || "", warning: session.warning || "", stopReason: session.stopReason || "", url: session.url,
         automation: session.automation || null, automationWithdrawn: session.automationWithdrawn === true,
         powerPaused: session.powerPaused === true,
@@ -108,6 +152,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
         cancelRequested: session.cancelRequested === true, cancellationConfirmed: session.cancellationConfirmed === true
       } : null,
       result: publicResult,
+      ...(includeGoal ? {worker: {...worker}} : {}),
       ...(includeLive ? { live: session ? buildLiveActivity(session) : sanitizeLiveActivity(result?.live) } : {})
     };
   };
@@ -181,16 +226,32 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
     return !result.cancelRequested && !result.error && TERMINAL_AUTOMATION_STATES.has(result.automation?.status);
   }
 
-  async function automationTarget() {
-    const response = await request(`${BACKEND_ORIGIN}/api/extension/integrations/ticket-service`, { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`Dashboard configuration returned HTTP ${response.status}.`);
+  /**
+   * Discover the delivery destinations the backend offers.
+   *
+   * A destination is only usable when the backend confirms it is configured
+   * and reachable. The kind and the canonical target are both returned, and
+   * the target is frozen for the session once consent is given.
+   */
+  async function automationTargets() {
+    const response = await request(`${BACKEND_ORIGIN}/api/extension/integrations`, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`Destination discovery returned HTTP ${response.status}.`);
     const body = await response.json();
-    if (!body.url) throw new Error("Configure a local ticket destination before enabling automatic delivery.");
+    if (!Array.isArray(body?.destinations)) throw new Error("The backend did not return a destination list.");
+    return body.destinations;
+  }
+
+  async function automationTarget(kind) {
+    const response = await request(`${BACKEND_ORIGIN}/api/extension/integrations/${encodeURIComponent(kind)}`, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`Destination configuration returned HTTP ${response.status}.`);
+    const body = await response.json();
+    if (!body.url) throw new Error("Configure a delivery destination before enabling automatic delivery.");
     // Reachability may be false while the configured canonical destination is known.
     const url = new URL(body.url);
-    if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== "/" ||
-        !(/^(127(?:\.\d{1,3}){3}|localhost|\[::1\])$/.test(url.hostname))) throw new Error("A known loopback dashboard destination is required.");
-    return { ok: true, url: body.url };
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname === "") {
+      throw new Error("The configured destination is not a usable origin.");
+    }
+    return { ok: true, url: body.url, kind };
   }
 
   async function ensureAlarm() {
@@ -207,7 +268,9 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
 
   function acceptAutomation(body, result) {
     if (body?.ok !== true || body.recording_id !== result.id || !AUTOMATION_STATES.has(body.status) ||
-        body.target_url !== result.automationPolicy.target_url || body.use_ai !== result.automationPolicy.use_ai ||
+        body.target_url !== result.automationPolicy.target_url ||
+        body.target_kind !== result.automationPolicy.target_kind ||
+        body.use_ai !== result.automationPolicy.use_ai ||
         body.max_tickets !== result.automationPolicy.max_tickets ||
         body.execution_authorized !== false || body.expires_at !== result.consentExpiresAt / 1000 ||
         !Number.isInteger(body.ticket_count) || !Number.isInteger(body.delivered_count) ||
@@ -365,10 +428,23 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
 
   async function inject(session) {
     requirePower();
+    // The page's own uncaught failures are only observable from the page's
+    // world. Install that relay first so a failure during page setup is not
+    // lost. A relay that cannot be installed only removes exception detail.
+    try {
+      await api.scripting.executeScript({
+        target: { tabId: session.tabId, frameIds: [0] },
+        world: "MAIN",
+        func: pantherDiagnosticRelay,
+        args: [session.diagnosticNonce]
+      });
+    } catch { /* Exception diagnostics stay unavailable; capture continues. */ }
+    requirePower();
     await api.scripting.executeScript({ target: { tabId: session.tabId, frameIds: [0] }, files: ["content/content.js"] });
     requirePower();
     const reply = await tabMessage(session.tabId, { type: "extension.captureStart", sessionId: session.sessionId,
-      automationEnabled: !!session.automation && !session.automationWithdrawn });
+      automationEnabled: !!session.automation && !session.automationWithdrawn, diagnosticNonce: session.diagnosticNonce,
+      captureStartMs: session.startTime });
     if (!reply?.ok) throw new Error("The page could not start capture. Reload the page and try again.");
   }
 
@@ -389,9 +465,11 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       if (message.automation.consent !== true || typeof message.automation.use_ai !== "boolean" || message.automation.max_tickets !== 5) {
         throw new Error("Automatic delivery requires fresh consent, a model choice, and the five-ticket limit.");
       }
-      const target = await automationTarget();
-      if (message.automation.target_url !== target.url) throw new Error("The dashboard destination changed or is unknown. Refresh the popup and consent to the displayed destination again.");
-      automation = { enabled: true, consent: true, target_url: target.url, use_ai: message.automation.use_ai, max_tickets: 5 };
+      const kind = typeof message.automation.target_kind === "string" ? message.automation.target_kind : "";
+      if (!kind) throw new Error("Choose a delivery destination before enabling automatic delivery.");
+      const target = await automationTarget(kind);
+      if (message.automation.target_url !== target.url) throw new Error("The delivery destination changed or is unknown. Refresh the popup and consent to the displayed destination again.");
+      automation = { enabled: true, consent: true, target_kind: kind, target_url: target.url, use_ai: message.automation.use_ai, max_tickets: 5 };
     }
     const session = {
       sessionId: crypto.randomUUID(), status: "recording", consent: true,
@@ -399,7 +477,8 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       startTime: now(), url: sanitizeUrl(tab.url), title: sanitizeText(tab.title || "", 200),
       goal: sanitizeText(message.goal || "", 1000), extensionId: api.runtime.id,
       screenshotConsent: message.screenshots === true, events: [], screenshots: [], lastScreenshotTs: 0, warning: "",
-      automation, uploadAttempts: 0, nextUploadRetryAt: null, automationWithdrawn: false
+      automation, uploadAttempts: 0, nextUploadRetryAt: null, automationWithdrawn: false,
+      diagnosticNonce: crypto.randomUUID()
     };
     if (automation) session.recordingId = await recordingId(session.extensionId, session.sessionId);
     requirePower();
@@ -432,7 +511,16 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
     session.lastScreenshotTs = ts;
   }
 
-  async function interaction(message, sender) {
+  /**
+   * Record an interaction, or a page failure the page itself disclosed.
+   *
+   * Both join the same ordered timeline, so a reviewer can see what happened
+   * and what failed, in order. A failure is an observation, not a verified
+   * defect, and it never leaves the local capture on its own. Both are
+   * refused unless the capture is recording, consent is current, and the
+   * sender is the captured top frame of the captured origin.
+   */
+  async function recordEvent(message, sender) {
     if (!powered()) return { ok: false, ignored: true };
     const session = await read(SESSION_KEY);
     const settings = await read(SETTINGS_KEY) || {};
@@ -594,7 +682,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
   }
 
   async function handle(message, sender) {
-    if (message.type === "page.interaction") return interaction(message, sender);
+    if (message.type === "page.interaction" || message.type === "page.diagnostic") return recordEvent(message, sender);
     if (message.type.startsWith("page.")) {
       const session = await read(SESSION_KEY);
       const result = await read(RESULT_KEY);
@@ -617,10 +705,10 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
     }
     if (!["extension.getStatus", "extension.openReview", "extension.cancelLiveAnalysis"].includes(message.type) && !(message.type === "extension.setEnabled" && message.enabled !== true)) requirePower();
     switch (message.type) {
-      case "extension.getStatus": return status(trustedMonitorControl(api, sender));
+      case "extension.getStatus": return status(trustedMonitorControl(api, sender), true);
       case "extension.analyzeLive": return analyzeLive(message);
       case "extension.cancelLiveAnalysis": return { ok: true, cancelled: typeof message.sessionId === "string" && !!message.sessionId && cancelLiveAnalysis(message.sessionId) };
-      case "extension.getAutomationTarget": return automationTarget();
+      case "extension.getAutomationTarget": return { ok: true, destinations: await automationTargets() };
       case "extension.startRecording": return start(message);
       case "extension.stopRecording": return stop();
       case "extension.openReview": return openReview();

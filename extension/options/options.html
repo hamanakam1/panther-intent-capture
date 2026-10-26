@@ -4,19 +4,20 @@
 <title>Panther · Capture review</title><link rel="stylesheet" href="options.css"></head>
 <body>
 <main class="shell">
-<header><div><p class="eyebrow">PANTHER INTENT CAPTURE</p><h1>From activity to a clear next step.</h1></div><button id="refresh">Refresh</button></header>
+<header><div><p class="eyebrow">PANTHER INTENT CAPTURE</p><h1>Make the next step clear.</h1><p class="header-note">Review saved captures here. Start a new capture from Panther’s browser toolbar.</p></div><button id="refresh">Refresh</button></header>
 <section class="status-bar" aria-label="System status">
 <div><span class="dot" id="backendDot"></span><strong id="backendStatus">Connecting to local backend…</strong></div>
-<div id="dashboardStatus">Checking ticket-service configuration…</div>
+<div><label for="deliveryDestination" class="muted">Delivery destination</label> <select id="deliveryDestination"></select> <span id="dashboardStatus">Checking ticket-service configuration…</span></div>
 </section>
+<p id="backendReadiness" class="save-notice" role="status" aria-live="polite">Checking review compatibility… Saved captures remain available to inspect.</p>
 <p id="message" role="status" aria-live="polite">Loading captures…</p>
 <div class="workspace">
-<section class="card library"><h2>Captures <span id="count">0</span></h2><p class="muted">Start from the extension on any supported web page. Evidence drafts are prepared automatically when you stop.</p><div id="recordings"></div></section>
+<section class="card library"><h2>Capture inbox <span id="count">0</span></h2><p class="muted">Saved on this computer. Select a session to review its evidence.</p><label for="captureSearch" class="field-label">Find a capture</label><input type="search" id="captureSearch" placeholder="Search title, page or goal" autocomplete="off"><p id="libraryEmpty" class="muted" role="status" hidden></p><div id="recordings"></div></section>
 <section class="card review" id="review">
-<div id="emptyReview"><h2>Your captures and deliveries.</h2><p>Choose a capture to follow automatic delivery, inspect observed steps, or review and send drafts manually.</p><p class="muted">Automatic delivery requires a separate opt-in before capture. Generated suggestions still require judgment; ordinary navigation does not prove a bug.</p></div>
+<div id="emptyReview"><p class="eyebrow">A SMALL, DELIBERATE LOOP</p><h2>From “something feels wrong” to a reviewable change.</h2><ol class="onboarding"><li><strong>Capture one workflow</strong><span>Choose a webpage, state your goal and Start from Panther’s toolbar. Typed values stay out of the recording.</span></li><li><strong>Compare intent with evidence</strong><span>Inspect the ordered actions and page-reported failures. Write the outcome you actually expect.</span></li><li><strong>Choose your next step</strong><span>Keep the draft locally, export it to Companion for explanation, or preview a ticket before sending.</span></li></ol><p class="muted">Automatic delivery requires separate session consent. Generated suggestions remain proposals for review.</p></div>
 <div id="captureView" hidden>
 <div class="section-heading"><h2 id="captureTitle"></h2><button id="deleteCapture" class="danger">Delete capture</button></div>
-<p id="captureMeta" class="muted"></p><p id="captureGoal"></p>
+<p id="captureMeta" class="muted"></p><p id="captureGoal" class="goal-callout"></p><p id="unsavedNotice" class="save-notice" role="status" hidden>Unsaved draft edits. Save each edited draft before exporting or leaving this capture.</p>
 <section id="automationPanel" class="automation" aria-label="Automatic delivery" hidden>
 <h3>Automatic delivery</h3><p id="automationStatus" role="status" aria-live="polite"></p>
 <p id="automationMeta" class="muted"></p><ul id="automationDeliveries"></ul>
@@ -24,8 +25,11 @@
 <p class="muted">Session-authorized, unreviewed proposals. Delivery does not authorize execution. Cancellation cannot undo a request already in flight or remove tickets already delivered.</p>
 </section>
 <div class="actions"><button id="generate">Generate evidence draft</button><button id="generateAI">Generate with local AI</button><button id="export">Export JSON</button></div>
+<section class="companion-handoff" aria-label="Companion handoff"><div><p class="eyebrow">CONTINUE IN COMPANION</p><h3>Turn this evidence into a next check</h3><p class="muted">Review and save your drafts below, then copy an intent bundle or download its JSON file. Your captured goal, observations and proposals stay distinct. No screenshots or raw event payloads are included.</p></div><div class="actions"><button id="copyCompanion" class="primary">Copy intent bundle</button><button id="exportCompanion">Download intent bundle</button><a href="http://127.0.0.1:8765" target="_blank" rel="noopener noreferrer">Open Companion ↗</a></div><p class="muted">In Companion, choose <strong>Import from Intent Capture</strong>, paste the bundle or choose the file, then preview before importing. Companion must be running. Nothing is sent automatically.</p></section>
+<details class="replay-tools"><summary>Replay exports</summary><p class="muted">Reviewable plans of the recorded path. Panther does not execute these files.</p><div class="actions"><button id="exportReplay">Export replay plan</button><button id="exportReplayScript">Export replay script</button></div></details>
 <p id="generationStatus" role="status" aria-live="polite"></p>
-<details><summary>Observed interactions</summary><ol id="events"></ol></details>
+<details open><summary>Observed interactions</summary><ol id="events"></ol></details>
+<details id="diagnosticsPanel" open hidden><summary>Page-reported failures</summary><p id="diagnosticNotice" class="muted"></p><ul id="diagnostics"></ul></details>
 <details id="screenshotsPanel" hidden><summary>Screenshots · pixels may contain private information</summary><p id="screenshotPrivacyNotice" class="muted" role="alert" hidden></p><div id="screenshots"></div></details>
 <div id="tickets"></div>
 </div>

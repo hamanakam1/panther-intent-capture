@@ -35,6 +35,14 @@ EVENTS = [
     {"type": "click", "ts": 1000250, "target": {"tag": "button", "label": "Choose filter"}},
     {"type": "navigation", "ts": 1001250, "url": "http://127.0.0.1:8080/#work-board"},
 ]
+FAILURE_EVENTS = EVENTS + [
+    {"type": "diagnostic", "ts": 1001750, "url": "http://127.0.0.1:8080/work-board",
+     "diagnostic": {"kind": "http_error", "message": "A request returned HTTP 500",
+                    "source": "http://127.0.0.1:8080/api/tickets", "status": 500}},
+    {"type": "diagnostic", "ts": 1001850, "url": "http://127.0.0.1:8080/work-board",
+     "diagnostic": {"kind": "uncaught_exception", "message": "TypeError: x is not a function",
+                    "source": "http://127.0.0.1:8080/app.js", "line": 12, "column": 3}},
+]
 MODEL_RESPONSE = [{
     "title": "Keep the filter selected", "description": "The filter may reset after navigation.",
     "steps_to_reproduce": ["Verify whether the selected filter resets after a reload"],
@@ -45,11 +53,11 @@ MODEL_RESPONSE = [{
 }]
 
 
-def generated_bundle(use_ai=False):
+def generated_bundle(use_ai=False, events=None):
     """Exercise the real generator/exporter while replacing only the AI call."""
     with patch.object(tickets, "_ollama_decompose", return_value=json.dumps(MODEL_RESPONSE)) as model, \
             patch.object(integrations, "_request", side_effect=AssertionError("No delivery is authorized")) as network:
-        generated = tickets.generate_drafts(copy.deepcopy(RECORDING), copy.deepcopy(EVENTS), use_ai=use_ai)
+        generated = tickets.generate_drafts(copy.deepcopy(RECORDING), copy.deepcopy(events or EVENTS), use_ai=use_ai)
         bundle = integrations.export_bundle(copy.deepcopy(RECORDING), generated)
         network.assert_not_called()
         if use_ai:
@@ -87,6 +95,40 @@ class BundleContractTests(unittest.TestCase):
         self.assertEqual(ai["provenance"]["origin"], "unverified_proposal")
         self.assertIs(ai["provenance"]["proposal_verified"], False)
         self.assertFalse(ai["provenance"]["media_analyzed"])
+
+    def test_page_reported_failures_travel_as_observations_not_as_verified_defects(self):
+        bundle = generated_bundle(False, FAILURE_EVENTS)
+        ticket = bundle["tickets"][0]
+        self.assertEqual(len(ticket["diagnostics"]), 2)
+        self.assertEqual(ticket["diagnostics"][0]["kind"], "http_error")
+        self.assertEqual(ticket["diagnostics"][0]["status"], 500)
+        self.assertEqual(ticket["diagnostics"][0]["event_index"], 3)
+        self.assertEqual(ticket["diagnostics"][1]["kind"], "uncaught_exception")
+        self.assertEqual(ticket["diagnostics"][1]["event_index"], 4)
+        self.assertEqual(ticket["provenance"]["diagnostic_count"], 2)
+        self.assertFalse(ticket["provenance"]["proposal_verified"])
+        self.assertFalse(ticket["execution_authorized"])
+        # A capture without failures still carries the field, and it is empty.
+        self.assertEqual(generated_bundle(False)["tickets"][0]["diagnostics"], [])
+
+    def test_friction_hypotheses_travel_as_possibilities_not_as_confirmed_defects(self):
+        events = EVENTS + [
+            {"type": "click", "ts": 1002250, "url": "http://127.0.0.1:8080/",
+             "target": {"tag": "button", "id": "save", "label": "Save"}},
+            {"type": "click", "ts": 1002450, "url": "http://127.0.0.1:8080/",
+             "target": {"tag": "button", "id": "save", "label": "Save"}},
+            {"type": "click", "ts": 1002650, "url": "http://127.0.0.1:8080/",
+             "target": {"tag": "button", "id": "save", "label": "Save"}},
+        ]
+        bundle = generated_bundle(False, events)
+        friction = bundle["tickets"][0]["friction"]
+        self.assertTrue(friction)
+        for finding in friction:
+            self.assertTrue(finding["hypothesis"])
+            self.assertIn(finding["kind"], {"repeated_clicks", "non_control_click"})
+            self.assertTrue(finding["event_indices"])
+        self.assertFalse(bundle["tickets"][0]["provenance"]["proposal_verified"])
+        self.assertFalse(bundle["tickets"][0]["execution_authorized"])
 
     def test_authority_is_literal_false_in_export_and_contract(self):
         bundle = generated_bundle(True)

@@ -74,3 +74,50 @@ footer p { margin: 0 0 4px; }
 @media (max-width: 340px) { .power-panel { padding: 13px 12px 10px; } main { padding: 10px; } h1 { font-size: 21px; } .power-actions .button { flex-basis: 120px; } }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
  
+/* A calm, readable rail on an ultrawide desk; equally usable as a small popup. */
+:root { color: #203b33; background: #eef2ec; }
+body { font-size: 14px; line-height: 1.55; }
+.power-panel { padding: 20px 22px 16px; background: #183e32; color: #fff; border-bottom: 1px solid #315347; box-shadow: 0 6px 24px #17312b12; }
+.brand { font-size: 15px; flex-wrap: wrap; }
+.brand-mark { width: 30px; height: 30px; background: #c5e6a1; color: #183e32; border-radius: 9px; }
+.brand-subtitle { color: #bed0c5; }
+.local-badge { margin-left: auto; font-size: 9px; letter-spacing: .12em; color: #c5e6a1; }
+.power-heading { margin: 17px 0 13px; }
+h1 { font-size: 26px; letter-spacing: -.7px; }
+.power-panel .small { color: #c1d2c8; font-size: 11px; }
+.power-panel .danger { color: #f9e3e2; background: #345347; border-color: #668273; }
+.power-panel .primary { background: #c5e6a1; color: #183e32; }
+.power-dot[data-state="on"] { background: #b6e289; box-shadow: 0 0 0 4px #ffffff16; }
+main { max-width: 850px; margin: auto; padding: 18px 20px 24px; }
+section { margin-bottom: 14px; }
+.activity-card, .evidence-card, .understanding-card, .actions-card, .handoff-card { border-radius: 14px; padding: 18px; background: #fffefa; border-color: #d9e0d5; }
+.next-card { padding: 5px 2px 0; }
+.eyebrow { margin: 0 0 7px; font-size: 10px; font-weight: 750; letter-spacing: .13em; color: #536d5c; }
+.next-card h2, .handoff-card h2 { font-size: 21px; line-height: 1.3; text-transform: none; letter-spacing: -.45px; color: #203b33; }
+#nextDetail { font-size: 13px; color: #52665a; margin: 10px 0 0; }
+.workflow { display: flex; list-style: none; gap: 6px; padding: 0; margin: 16px 0; }
+.workflow li { flex: 1; padding: 9px 4px; border-bottom: 2px solid #d2dbce; color: #617263; font-size: 11px; font-weight: 650; }
+.workflow li[data-current="true"] { color: #244f38; border-color: #417b47; }
+.session-actions { margin-bottom: 18px; }
+.session-actions .small { font-size: 11px; }
+.button { min-height: 42px; border-radius: 9px; }
+.understanding-card { background: #f8fbef; border-color: #ccdab9; }
+.understanding-summary { font-size: 17px; line-height: 1.45; }
+.inferred-intent { font-size: 13px; }
+.small { font-size: 12px; line-height: 1.6; }
+.source-label, .freshness { font-size: 11px; }
+h2 { font-size: 11px; letter-spacing: .09em; }
+h3 { font-size: 12px; }
+.counts { gap: 20px; margin-top: 14px; }
+.counts dd { font-size: 30px; letter-spacing: -.8px; }
+.counts dt { font-size: 13px; }
+.recent-actions li { grid-template-columns: 87px minmax(0,1fr); gap: 12px; padding: 11px 0; }
+.event-meta { font-size: 10px; }
+.event-label, .friction-list, .checkbox-label, .intent-context, .ai-consent-details { font-size: 12px; }
+.handoff-card { background: #e7eddc; }
+.handoff-card h2 { font-size: 19px; }
+.companion-link { display: flex; justify-content: space-between; color: #234d36; font-size: 13px; font-weight: 700; margin-top: 16px; padding-top: 12px; border-top: 1px solid #c6d3b9; text-decoration: none; }
+a:focus-visible { outline: 3px solid #296bce; outline-offset: 3px; }
+footer { font-size: 10px; }
+@media (min-width: 560px) { .power-actions { position: absolute; top: 65px; right: 22px; max-width: 200px; } .power-heading { padding-right: 210px; } }
+@media (max-width: 340px) { .power-panel { padding: 14px; } main { padding: 14px 10px; } h1 { font-size: 22px; } .local-badge { display: none; } .next-card h2 { font-size: 19px; } .workflow li { font-size: 10px; } }

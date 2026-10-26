@@ -6,12 +6,12 @@ Panther separates browser capture and draft review from destination delivery. Th
 
 Choose **Save draft edits**, then **Export JSON** in the review UI. Exports contain the currently saved drafts, source metadata, bounded evidence references, and explicit authority flags. They do not contain screenshot image data, video files, raw event arrays, local filesystem paths, or destination credentials.
 
-The export has `schema_version: "1.0"`. The `schema` value identifies this documented contract. The machine-readable [Draft 2020-12 JSON Schema](../schemas/intent-bundle.schema.json) defines the supported fields, bounds, and fixed review/authority flags. Validation establishes structure, not evidence truth or delivery. This abbreviated synthetic example uses the actual field names:
+The export has `schema_version: "1.2"`. The `schema` value identifies this documented contract. The machine-readable [Draft 2020-12 JSON Schema](../schemas/intent-bundle.schema.json) defines the supported fields, bounds, and fixed review/authority flags. Validation establishes structure, not evidence truth or delivery. This abbreviated synthetic example uses the actual field names:
 
 ```json
 {
   "schema": "https://github.com/hamanakam1/panther-intent-capture#intent-bundle",
-  "schema_version": "1.0",
+  "schema_version": "1.2",
   "producer": "panther-intent-capture",
   "exported_at": 1792537200,
   "recording": {
@@ -41,6 +41,8 @@ The export has `schema_version: "1.0"`. The `schema` value identifies this docum
       "priority": "medium",
       "evidence": "Three recorded navigation and control events; verify the reported reset.",
       "evidence_refs": [{"kind": "event", "event_index": 1, "type": "change", "timestamp_ms": 1792537101000}],
+      "diagnostics": [{"kind": "http_error", "event_index": 3, "message": "A request returned HTTP 500", "source": "https://example.test/api/tickets", "status": 500}],
+      "friction": [{"kind": "repeated_clicks", "title": "Repeated clicks on one control", "detail": "3 clicks on the same control within 10 seconds may indicate an unclear or unresponsive control, or intentional repetition. No failure is verified.", "event_indices": [1, 2, 3], "hypothesis": true}],
       "screenshot_timestamps": [],
       "source_url": "https://example.test/settings",
       "provenance": {
@@ -49,14 +51,15 @@ The export has `schema_version: "1.0"`. The `schema` value identifies this docum
         "recording_id": "example-capture",
         "mode": "observed",
         "model": null,
-        "generation_revision": 2,
+        "generation_revision": 3,
         "evidence_kind": "observed_events",
         "proposal_verified": false,
         "event_count": 3,
         "events_total": 3,
         "events_truncated": false,
         "screenshots_count": 0,
-        "media_analyzed": false
+        "media_analyzed": false,
+        "diagnostic_count": 1
       },
       "status": "draft",
       "requires_review": true,
@@ -69,11 +72,19 @@ The export has `schema_version: "1.0"`. The `schema` value identifies this docum
 
 Recording times are Unix seconds; event references use Unix milliseconds. `event_index` is one-based within the observed event list. A reference is evidence provenance, not proof of the proposed change or a promise that an image is embedded. Source URLs are sanitized. Some optional metadata may be missing from older captures.
 
+`diagnostics` lists the page-reported failures that belong to the draft, each with the `event_index` of the recorded event it was observed at. In an exported draft that index refers to the analysed event sequence, the same basis as `evidence_refs`. A failure is what the page's own error stream said: it is an observation, not a verified defect, not a reproduction, and not a permission to act. `diagnostic_count` is the number of failures in the whole capture. Consumers should present a failure as something the page reported, and should not present it as a confirmed cause. See [session diagnostics](SESSION_DIAGNOSTICS.md).
+
 Observed drafts summarize actions and the supplied goal without a model. AI drafts identify their model, mode, and generation revision. Their `hypothesis` and `suggested_verification_steps` are unverified proposals kept separately from `steps_to_reproduce`, which is derived from captured events. `proposal_verified: false` means the proposed problem has not been established by those events. Preserve those distinctions in downstream tools. Preserve unresolved questions and missing acceptance criteria instead of inventing certainty. Draft IDs remain stable for the recording, generation mode, and draft position; editing a draft does not create a new identity.
+
+The `evidence` sentence states the scope the draft was drawn from. When a recording has more events than the generator analyses, it says how many of how many were used and that the rest were not analysed; `provenance.events_total` and `provenance.events_truncated` carry the same fact in machine-readable form. Importers should show the scope rather than presenting a truncated analysis as a complete one.
 
 ### Versioning and validation
 
-Consumers should select a schema using `schema_version` and explicitly reject or quarantine unknown versions for review. Version 1.0 has closed object fields: adding a wire field requires a new schema version, even when the new producer considers it optional. Compatible additions use a new minor version; removal, changed meaning, or incompatible types require a new major version. Documentation clarifications that do not change valid payloads do not change the version.
+Consumers should select a schema using `schema_version` and explicitly reject or quarantine unknown versions for review. Version 1.2 has closed object fields: adding a wire field requires a new schema version, even when the new producer considers it optional. Compatible additions use a new minor version; removal, changed meaning, or incompatible types require a new major version. Documentation clarifications that do not change valid payloads do not change the version.
+
+Version 1.2 adds the optional `diagnostics` array on a ticket, the optional `diagnostic_count` on the recording, the optional `diagnostic_count` in provenance, and the optional `friction` array on a ticket. A 1.2 producer always emits `diagnostics` and `friction` on every ticket; they are empty when the capture recorded no failure and no friction signal. A consumer that only understands an earlier version must select the schema it understands and treat a 1.2 bundle as an unknown version to quarantine for review, exactly as it would for any other unknown version. Migration requires no rewriting of existing payloads: a 1.0 bundle remains a valid 1.0 bundle, and the producer's own version, not the consumer's, decides which contract it was written against.
+
+`friction` lists the possible-friction hypotheses derived from the recorded actions. Like a failure, a friction signal is a possibility about what happened, not a confirmed defect and not a permission to act. It always carries `hypothesis: true`.
 
 There is no automatic bundle migration or importer in this release. Any future migration must preserve capture/draft identities, provenance, unresolved questions, and the distinction between observations and proposals. It must never turn `execution_authorized` on, remove review requirements, rewrite existing delivery receipts, or silently submit to another system. Keep the original artifact alongside a migrated one.
 
@@ -130,11 +141,12 @@ The backend binds to `127.0.0.1:7890` by default. `/` serves the review UI. API 
 
 | Method and route | Purpose |
 |---|---|
-| `GET /health` | Backend identity and advertised capabilities. |
+| `GET /health` | Backend identity and advertised capabilities, including the `bundle_schema_version` of the export contract. |
 | `POST /record` | Upload a consented capture with stable session identity. Used by the extension. |
 | `GET /recordings` | List capture summaries. |
 | `GET /recordings/<id>` | Get one capture's public metadata. |
 | `GET /recordings/<id>/events` | Inspect its sanitized local event evidence. |
+| `GET /recordings/<id>/diagnostics` | Inspect the page-reported failures it recorded. |
 | `GET /recordings/<id>/screenshots` | Inspect separately consented local screenshot pixels. |
 | `DELETE /recordings/<id>` | Delete local capture artifacts and drafts. |
 | `POST /tickets/<id>` | Generate an observed draft by default; `{ "use_ai": true }` explicitly requests local AI. |
@@ -143,9 +155,14 @@ The backend binds to `127.0.0.1:7890` by default. `/` serves the review UI. API 
 | `GET /export/<id>` | Export the portable JSON bundle. |
 | `GET /automation/<id>` | Inspect automatic job status, stage, counts, retry timing, and delivery receipts; manual captures return `disabled`. |
 | `POST /automation/<id>` | `{ "action": "cancel" }` stops remaining delivery; `{ "action": "retry" }` advances an eligible retry without resetting its budget or expiry. |
+| `GET /integrations` | List every delivery destination with its status. |
 | `GET /integrations/ticket-service` | Check dashboard health-route reachability. |
+| `GET /integrations/github` | Check the GitHub destination's configuration and reachability. |
+| `GET /recordings/<id>/replay` | Read the replay plan for a capture, as JSON or as a Playwright script. |
 | `POST /integrations/ticket-service/preview/<id>` | Build the exact dashboard payload without contacting it. |
+| `POST /integrations/github/preview/<id>` | Build the exact issue payload without contacting GitHub. |
 | `POST /integrations/ticket-service/submit/<id>` | Submit one confirmed, previewed draft and verify it. |
+| `POST /integrations/github/submit/<id>` | Submit one confirmed, previewed draft as an issue and verify it. |
 
 POST and DELETE requests require an `X-Panther-Client` header. JSON POST requests use `Content-Type: application/json`. Browser requests must come from a permitted extension origin or the backend's loopback origin; unrelated website origins are refused. This header is not a secret or authentication token. The API is intended for a single-user local environment.
 
@@ -168,7 +185,17 @@ Manual submit repeats the reviewed body and adds `"confirmed": true` plus the ex
 
 Keep the capture and neutral export schema unchanged. Map a reviewed draft to the target system's supported API, retaining source evidence, the stable capture/draft identity, authority flags, and a durable delivery receipt. Provide a preview, require explicit confirmation, use the target's native idempotency capability, and verify the returned object. Report uncertain delivery rather than silently retrying under a different identity. Make deliberate edits to already delivered items a separate operation.
 
-Remote destinations need their own authentication, data-sharing consent, destination validation, and credential storage design. The built-in dashboard adapter intentionally remains loopback-only; do not relax its host checks to turn it into an arbitrary webhook client.
+A destination implements the same contract the two built-in ones use: a status that never reads another system's data, a canonical target, a preview that never contacts the destination, a confirmed submit that verifies what it created, and a durable receipt keyed by that target. `backend/destinations.py` is the registry; adding a destination means implementing that contract and listing it there. The existing routes, the popup, the review page and the automatic-delivery policy then work with it without further change.
+
+Remote destinations need their own authentication, data-sharing consent, destination validation, and credential storage design. The built-in dashboard adapter intentionally remains loopback-only; do not relax its host checks to turn it into an arbitrary webhook client. The [GitHub destination](GITHUB_DESTINATION.md) is the reference for a remote one: a fixed host, a named repository, a credential that never leaves the adapter, and a destination that is chosen explicitly and frozen for the session.
+
+## The GitHub issues destination
+
+A reviewed draft can be delivered to a named GitHub repository as an issue. It is configured on the backend with `PANTHER_GITHUB_TOKEN` and `PANTHER_GITHUB_REPO` (or the equivalent files under `PANTHER_DATA_DIR`), the API host is fixed to `https://api.github.com`, and the credential never appears in a preview, a receipt, an export or a status report.
+
+The routes mirror the local ticket service's, with the same preview-and-confirm rules: `GET /api/extension/integrations/github`, `POST /api/extension/integrations/github/preview/<id>` and `POST /api/extension/integrations/github/submit/<id>`. `GET /api/extension/integrations` lists every destination with its status.
+
+Each issue carries a stable identity marker, `panther-capture-<recording-id>-<draft-id>`, and the review fence is the text of the body rather than only a label. The same identity is never created twice, and the same identity with different content is a conflict rather than an update. See [the GitHub destination](GITHUB_DESTINATION.md).
 
 ## Verification boundary
 

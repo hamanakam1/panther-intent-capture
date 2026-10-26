@@ -125,6 +125,10 @@ def create_recording(
         if metadata:
             manifest[recording_id]["consent"] = metadata.get("consent") is True
             manifest[recording_id]["screenshots_consent"] = metadata.get("screenshots_consent") is True
+            diagnostic_count = metadata.get("diagnostic_count")
+            manifest[recording_id]["diagnostic_count"] = (
+                diagnostic_count if isinstance(diagnostic_count, int) and not isinstance(diagnostic_count, bool) else 0
+            )
         if automation_policy is not None:
             manifest[recording_id]["automation"] = copy.deepcopy(automation_policy)
         _enforce_ttl_and_cap(manifest)

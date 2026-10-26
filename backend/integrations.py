@@ -23,7 +23,7 @@ try:
 except ImportError:  # python backend/server.py
     import storage
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.2"
 FENCE = "not authorized for autonomous execution"
 SOURCE = "panther-intent-capture:agent-proposal"
 REQUEST_TIMEOUT = 8
@@ -88,6 +88,79 @@ def _references(value: Any) -> list:
     return result
 
 
+def _friction(value: Any) -> list:
+    """Copy bounded friction hypotheses.
+
+    A friction signal is a possibility about the recorded actions, never a
+    confirmed defect. Only the allowlisted fields travel.
+    """
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value[:10]:
+        if not isinstance(item, dict):
+            continue
+        clean: dict[str, Any] = {}
+        kind = item.get("kind")
+        if isinstance(kind, str) and kind:
+            clean["kind"] = kind[:60]
+        title = item.get("title")
+        if isinstance(title, str) and title:
+            clean["title"] = title[:200]
+        detail = item.get("detail")
+        if isinstance(detail, str) and detail:
+            clean["detail"] = detail[:600]
+        indices = item.get("event_indices")
+        if isinstance(indices, list):
+            clean["event_indices"] = [entry for entry in indices[:50]
+                                      if isinstance(entry, int) and not isinstance(entry, bool) and entry >= 1]
+        if item.get("hypothesis") is True:
+            clean["hypothesis"] = True
+        if clean:
+            result.append(clean)
+    return result
+
+
+def _diagnostics(value: Any) -> list:
+    """Copy bounded page-failure records.
+
+    A failure is what the page's own error stream said. Only the allowlisted
+    fields travel: a kind, the recorded event index, a bounded message, a
+    sanitized location and, for HTTP failures, a status code. No stack trace,
+    page text or image content is included.
+    """
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value[:20]:
+        if not isinstance(item, dict):
+            continue
+        clean: dict[str, Any] = {}
+        kind = item.get("kind")
+        if isinstance(kind, str) and kind:
+            clean["kind"] = kind[:40]
+        index = item.get("event_index")
+        if isinstance(index, int) and not isinstance(index, bool) and index >= 1:
+            clean["event_index"] = index
+        message = item.get("message")
+        if isinstance(message, str) and message.strip():
+            clean["message"] = message[:300]
+        source = item.get("source")
+        if isinstance(source, str) and source:
+            clean["source"] = _safe_url(source)
+        status = item.get("status")
+        if isinstance(status, int) and not isinstance(status, bool) and 400 <= status <= 599:
+            clean["status"] = status
+        if clean.get("kind") == "uncaught_exception":
+            for key in ("line", "column"):
+                position = item.get(key)
+                if isinstance(position, int) and not isinstance(position, bool) and 0 <= position <= 1000000:
+                    clean[key] = position
+        if clean:
+            result.append(clean)
+    return result
+
+
 def _draft(ticket: dict) -> dict:
     if not isinstance(ticket, dict):
         raise ValueError("Ticket must be an object")
@@ -101,7 +174,7 @@ def _draft(ticket: dict) -> dict:
                        for key in ("generation_revision", "evidence_kind", "proposal_verified",
                                    "origin", "producer", "recording_id", "mode", "model", "generator", "inference_kind",
                                    "evidence_mode", "created_at", "confidence", "warning", "event_count", "events_total",
-                                   "events_truncated", "screenshots_count", "media_analyzed")
+                                   "events_truncated", "screenshots_count", "media_analyzed", "diagnostic_count")
                        if key in provenance and (provenance[key] is None or isinstance(provenance[key], (str, int, float, bool)))}
     screenshots = ticket.get("screenshots")
     if not isinstance(screenshots, list):
@@ -120,6 +193,8 @@ def _draft(ticket: dict) -> dict:
         "priority": _text(ticket.get("priority") or "medium", 20),
         "evidence": _text(ticket.get("evidence"), 6000),
         "evidence_refs": _references(ticket.get("evidence_refs")),
+        "diagnostics": _diagnostics(ticket.get("diagnostics")),
+        "friction": _friction(ticket.get("friction")),
         "screenshot_timestamps": [v for v in screenshots[:20]
                                  if isinstance(v, (int, float)) and not isinstance(v, bool)],
         "source_url": _safe_url(ticket.get("source_url") or provenance.get("source_url") or provenance.get("url")),
@@ -141,6 +216,9 @@ def _recording(recording: dict) -> dict:
         "capture_mode": _text(recording.get("capture_mode"), 30),
         **{key: recording[key] for key in ("start_time", "end_time", "duration_ms", "event_count", "screenshot_count")
            if key in recording and isinstance(recording[key], (int, float))},
+        **({"diagnostic_count": recording["diagnostic_count"]}
+           if isinstance(recording.get("diagnostic_count"), int) and not isinstance(recording.get("diagnostic_count"), bool)
+           else {}),
     }
 
 

@@ -54,7 +54,9 @@ function fixture(options = {}) {
     turnOn() { powerOn = true; controller.unlock(); },
     send(type, values = {}, sender = control) { return controller.message({ type, ...values }, sender); },
     start(values = {}) { return this.send("extension.startRecording", { tabId: 7, consent: true, ...values }); },
-    event(values = {}, sender = page) { return this.send("page.interaction", { sessionId: data[SESSION_KEY]?.sessionId, payload: { type: "click", url: activeTab.url, target: { tag: "button", label: "Save" }, ...values } }, sender); }
+    event(values = {}, sender = page) { return this.send("page.interaction", { sessionId: data[SESSION_KEY]?.sessionId, payload: { type: "click", url: activeTab.url, target: { tag: "button", label: "Save" }, ...values } }, sender); },
+    contentInjections() { return calls.inject.filter((call) => Array.isArray(call.files)); },
+    mainWorldInjections() { return calls.inject.filter((call) => call.world === "MAIN"); }
   };
 }
 
@@ -62,7 +64,7 @@ test("all manifests are valid and Chromium permissions are scoped to an invoked 
   for (const variant of ["", ".chrome", ".firefox", ".safari"]) {
     const manifest = JSON.parse(await readFile(new URL(`../extension/manifest${variant}.json`, import.meta.url)));
     assert.deepEqual(manifest.permissions, ["storage", "activeTab", "scripting", "alarms", ...(!variant || variant === ".chrome" ? ["nativeMessaging"] : [])]);
-    assert.equal(manifest.version, "1.5.0");
+    assert.equal(manifest.version, "1.7.0");
     assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1:7890/*"]);
     assert.equal(manifest.content_scripts, undefined);
     assert.equal(manifest.offscreen, undefined);
@@ -189,11 +191,49 @@ test("popup tabId works without sender.tab and only the top frame is injected", 
   const f = fixture();
   const result = await f.start({ goal: "Make filtering clearer" });
   assert.equal(result.status, "recording");
-  assert.deepEqual(f.calls.inject[0], { target: { tabId: 7, frameIds: [0] }, files: ["content/content.js"] });
+  // The content script and the main-world failure relay both target only the
+  // top frame of the chosen tab, and the relay carries the session nonce.
+  assert.equal(f.contentInjections().length, 1);
+  assert.deepEqual(f.contentInjections()[0], { target: { tabId: 7, frameIds: [0] }, files: ["content/content.js"] });
+  assert.equal(f.mainWorldInjections().length, 1);
+  assert.deepEqual(f.mainWorldInjections()[0].target, { tabId: 7, frameIds: [0] });
+  assert.deepEqual(f.mainWorldInjections()[0].args, [f.data[SESSION_KEY].diagnosticNonce]);
   assert.equal(f.data[SESSION_KEY].url, "https://app.test/dashboard#work-board");
   assert.equal(f.data[SESSION_KEY].goal, "Make filtering clearer");
   assert.equal(f.data[SESSION_KEY].screenshotConsent, false);
   assert.ok(f.calls.badges.some((value) => value.text === "REC"));
+});
+
+test("page failures join the capture timeline only for the active consented session", async () => {
+  const f = fixture();
+  await f.start();
+  const id = f.data[SESSION_KEY].sessionId;
+  const accepted = await f.send("page.diagnostic", { sessionId: id, payload: {
+    type: "diagnostic",
+    diagnostic: { kind: "http_error", message: "A request returned HTTP 500", source: "https://app.test/api/tickets?token=private", status: 500, private: "never" }
+  } }, page);
+  assert.equal(accepted.ok, true);
+  const event = f.data[SESSION_KEY].events.at(-1);
+  assert.equal(event.type, "diagnostic");
+  assert.equal(event.diagnostic.kind, "http_error");
+  assert.equal(event.diagnostic.status, 500);
+  assert.equal(event.diagnostic.source, "https://app.test/api/tickets");
+  assert.doesNotMatch(JSON.stringify(event), /private|never/);
+  // Another session, another tab, another frame and another origin are refused.
+  for (const sender of [{ ...page, tab: { id: 8 } }, { ...page, frameId: 1 }, { ...page, url: "https://other.test" }, { ...page, id: "other-extension" }]) {
+    assert.equal((await f.send("page.diagnostic", { sessionId: id, payload: { type: "diagnostic", diagnostic: { kind: "http_error", status: 500 } } }, sender)).ignored, true);
+  }
+  assert.equal((await f.send("page.diagnostic", { sessionId: "stale-session", payload: { type: "diagnostic", diagnostic: { kind: "http_error", status: 500 } } }, page)).ignored, true);
+  assert.equal(f.data[SESSION_KEY].events.length, 1);
+});
+
+test("a stopped or unconsented capture refuses page failures", async () => {
+  const f = fixture();
+  await f.start();
+  const id = f.data[SESSION_KEY].sessionId;
+  await f.send("extension.stopRecording", {}, monitor);
+  const refused = await f.send("page.diagnostic", { sessionId: id, payload: { type: "diagnostic", diagnostic: { kind: "http_error", status: 500 } } }, page);
+  assert.equal(refused.ignored, true);
 });
 
 test("page senders cannot invoke extension controls or impersonate another tab/frame/origin", async () => {
@@ -257,7 +297,7 @@ test("monitor stop cannot replay a retained capture after Off and On", async () 
 
 test("monitor can withdraw automatic delivery from an active capture without creating or delivering tickets", async () => {
   const f = fixture({ fetch: async () => ({ ok: true, json: async () => ({ url: "http://127.0.0.1:8080" }) }) });
-  await f.start({ automation: { enabled: true, consent: true, target_url: "http://127.0.0.1:8080", max_tickets: 5, use_ai: false } });
+  await f.start({ automation: { enabled: true, consent: true, target_kind: "ticket-service", target_url: "http://127.0.0.1:8080", max_tickets: 5, use_ai: false } });
   const sender = { ...control, url: `chrome-extension://${control.id}/monitor/monitor.html` };
   const state = await f.send("extension.cancelAutomation", {}, sender);
   assert.equal(state.session.automationWithdrawn, true);
@@ -408,7 +448,7 @@ test("same-origin reload reinjects but cross-origin navigation stops and saves",
   const f = fixture();
   await f.start();
   await f.controller.tabUpdated(7, { status: "complete" }, { url: "https://app.test/other" });
-  assert.equal(f.calls.inject.length, 2);
+  assert.equal(f.contentInjections().length, 2);
   await f.controller.tabUpdated(7, { url: "https://other.test" }, { url: "https://other.test" });
   assert.equal(f.data[SESSION_KEY], undefined);
   assert.equal(JSON.parse(f.calls.fetch[0].init.body).stopReason, "left_origin");
@@ -454,7 +494,7 @@ test("browser-session marker prevents restored tab events from resuming capture 
   const result = await f.send("extension.getStatus");
   assert.equal(result.status, "pending");
   assert.equal(result.session.stopReason, "browser_or_extension_restarted");
-  assert.equal(f.calls.inject.length, 1);
+  assert.equal(f.contentInjections().length, 1);
   assert.equal(f.calls.fetch.length, 0);
   assert.equal(f.data[SESSION_KEY].events.length, 1);
 });
@@ -493,13 +533,14 @@ test("discard requires a stopped session and deletes only its local capture", as
   assert.equal(f.data[SETTINGS_KEY].enabled, true);
 });
 
-const automaticPolicy = { enabled: true, consent: true, target_url: "http://127.0.0.1:8080", use_ai: false, max_tickets: 5 };
+const automaticPolicy = { enabled: true, consent: true, target_kind: "ticket-service", target_url: "http://127.0.0.1:8080", use_ai: false, max_tickets: 5 };
 
 function automaticFixture() {
   const transport = { failUpload: false, failStatus: false, target: automaticPolicy.target_url, state: "queued", count: 0, delivered: 0, tombstone: false };
   let policy, savedId, expiresAt;
   const f = fixture({ fetch: async (url, init = {}) => {
     if (url.endsWith("/integrations/ticket-service")) return { ok: true, json: async () => ({ ok: false, url: transport.target }) };
+    if (url.endsWith("/integrations")) return { ok: true, json: async () => ({ destinations: [{ kind: "ticket-service", label: "Local ticket service", available: false, configured: true, state: "unavailable", url: transport.target, error: "" }] }) };
     if (url.endsWith("/record")) {
       const payload = JSON.parse(init.body);
       savedId = f.data[SESSION_KEY].recordingId;
@@ -518,7 +559,7 @@ function automaticFixture() {
       return { ok: true, json: async () => ({ ok: true, recording_id: id, status: transport.state, stage: "generation", ticket_count: transport.count,
         delivered_count: transport.delivered, attempts: 1, next_retry_at: null, error: transport.state === "blocked" ? "Safety check blocked delivery" : "",
         deliveries: transport.delivered ? [{ ticket_id: "draft-1", state: "delivered", verified: true, ticket_url: "http://127.0.0.1:8080/?ticket=fixture" }] : [],
-        target_url: policy.target_url, use_ai: policy.use_ai, max_tickets: policy.max_tickets, expires_at: expiresAt, execution_authorized: false }) };
+        target_url: policy.target_url, target_kind: policy.target_kind, use_ai: policy.use_ai, max_tickets: policy.max_tickets, expires_at: expiresAt, execution_authorized: false }) };
     }
     return { ok: true, json: async () => ({ tickets: [] }) };
   } });
@@ -772,7 +813,7 @@ test("Off freezes active capture without upload, retains events, clears consent 
   assert.equal((await f.send("page.stop", { sessionId: id }, page)).ignored, true);
   assert.equal((await f.send("page.getStatus", {}, page)).status, "pending");
   await f.controller.tabUpdated(7, { status: "complete" }, f.activeTab);
-  assert.equal(f.calls.inject.length, 1);
+  assert.equal(f.contentInjections().length, 1);
   f.turnOn(); await f.send("extension.getStatus");
   await f.controller.alarm(AUTOMATION_ALARM);
   assert.equal(f.calls.fetch.length, 0);
@@ -868,4 +909,39 @@ test("Off during destination discovery prevents later injection and capture crea
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.calls.inject.length, 0);
   assert.equal(f.data[SESSION_KEY], undefined);
+});
+
+test("captured goal is supplied only to trusted extension status, including after Save", async () => {
+  const f = fixture(); await f.start({goal: "Preserve selection token=private-goal-secret"});
+  const popup = await f.send("extension.getStatus");
+  assert.match(popup.session.goal, /Preserve selection/);
+  assert.doesNotMatch(popup.session.goal, /private-goal-secret/);
+  assert.equal(popup.live, undefined);
+  assert.equal((await f.send("page.getStatus", {}, page)).session.goal, undefined);
+  const forged = await f.send("extension.getStatus", {}, page);
+  assert.equal(forged.ok, false); assert.equal(forged.session, undefined);
+  await f.event(); await f.send("extension.stopRecording");
+  const saved = await f.send("extension.getStatus");
+  assert.match(saved.result.goal, /Preserve selection/);
+  assert.doesNotMatch(saved.result.goal, /private-goal-secret/);
+  const publicSaved = await f.send("page.getStatus", {}, page);
+  assert.equal(publicSaved.result.goal, undefined);
+  assert.equal(publicSaved.result.live, undefined);
+});
+
+test("trusted status reports loaded worker contract without leaking it to page status or rereading manifest", async () => {
+  const f = fixture();
+  f.api.runtime.getManifest = () => ({version: "1.7.0"});
+  f.restartWorker();
+  f.api.runtime.getManifest = () => ({version: "9.9.9"});
+  const state = await f.send("extension.getStatus");
+  assert.deepEqual(state.worker, {capture_contract: 2, app_version: "1.7.0"});
+  assert.equal(f.calls.inject.length, 0);
+  assert.equal(f.calls.fetch.length, 0);
+  const rejected = await f.send("extension.getStatus", {}, page);
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.worker, undefined);
+  await f.send("extension.startRecording", {tabId: 7, consent: true});
+  const pageState = await f.send("page.getStatus", {}, page);
+  assert.equal(pageState.worker, undefined);
 });
