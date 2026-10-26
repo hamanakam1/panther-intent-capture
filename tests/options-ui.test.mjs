@@ -487,12 +487,13 @@ test("new review UI keeps legacy service captures readable but blocks edits and 
   const f = fixture({initialHealth: legacyHealth}); await f.ready;
   assert.ok(f.fields().length > 0);
   assert.ok(f.fields().every(field => field.disabled));
-  for (const id of ["generate", "generateAI", "export", "copyCompanion", "exportCompanion", "exportReplay"]) assert.equal(f.get(id).disabled, true, id);
+  for (const id of ["generate", "generateAI", "export", "copyCompanion", "exportCompanion", "exportReplay", "deleteCapture"]) assert.equal(f.get(id).disabled, true, id);
   assert.match(f.get("backendReadiness").textContent, /Finish capture → Off → reload extension → On/);
   assert.match(f.get("backendStatus").textContent, /unknown.*read-only/);
   assert.equal(f.calls.filter(call => call.method !== "GET").length, 0);
   await f.draftButton("Save draft edits").listeners.click();
   await f.get("copyCompanion").listeners.click();
+  await f.get("deleteCapture").listeners.click();
   assert.equal(f.calls.filter(call => call.method !== "GET" || call.path.startsWith("export/")).length, 0);
   assert.equal(f.clipboardWrites.length, 0);
 });
@@ -543,4 +544,14 @@ test("unconfirmed health still allows saved capture inspection when read routes 
   assert.ok(f.fields().length > 0);
   assert.ok(f.fields().every(field => field.disabled));
   assert.equal(f.get("backendReadiness").hidden, false);
+});
+
+test("capture deletion rechecks readiness if the service is replaced after the page loaded", async () => {
+  const f = fixture(); await f.ready;
+  assert.equal(f.get("deleteCapture").disabled, false);
+  f.respond("GET", "health", () => legacyHealth);
+  await f.get("deleteCapture").click();
+  assert.equal(f.calls.some(call => call.method === "DELETE"), false);
+  assert.equal(f.get("deleteCapture").disabled, true);
+  assert.ok(f.fields().length > 0);
 });
