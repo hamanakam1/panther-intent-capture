@@ -38,12 +38,16 @@ Opening the monitor as an ordinary HTTP page is not a substitute for that.
 
 ## Handoff to Companion
 
-Choose **Export for Companion** in the saved capture. The download uses the
-same destination-neutral `intent-bundle` schema version `1.2` as **Export
-JSON**. No extra permission, background connection, or submission occurs.
+Choose **Copy intent bundle** in the saved capture, or **Download intent
+bundle** to keep a JSON file. Both use the same destination-neutral
+`intent-bundle` schema version `1.2` as **Export JSON**. Copy writes only after
+your click, never reads the clipboard, and uses no new extension permission.
+If the browser blocks clipboard access, use the download instead. No
+background connection or submission occurs.
 
-In Companion, choose **Import capture** and select that JSON file. Review its
-source, stated goal, and proposals before adding evidence. Using the imported
+In Companion, choose **Import from Intent Capture**, then **Paste bundle JSON**
+or **Choose JSON file**. Choose **Preview bundle** and review its source,
+captured goal, and proposals before importing. Using the imported
 goal is a separate choice: receiving a capture should not silently replace the
 human's current goal. The default local Companion address is
 `http://127.0.0.1:8765`; it must already be running. Custom ports can be opened
@@ -53,6 +57,9 @@ The bundle includes a stable capture identity, bounded recording metadata,
 reviewable draft text, evidence references, provenance, and strict review and
 execution fences. It excludes screenshot pixels and raw event payloads.
 Export and import never authorize code execution or ticket delivery.
+Unsaved edits block copying and downloading. If wording changes during export
+preparation, copy again after saving. If a clipboard write was already in
+flight, a visible warning identifies the copied text as an earlier version.
 
 Useful patterns from comparable products informed this workflow: Jam's
 ordered evidence and diagnostic context, and Sentry's minimization of captured

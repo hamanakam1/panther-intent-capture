@@ -4,7 +4,7 @@
 <title>Panther · Capture review</title><link rel="stylesheet" href="options.css"></head>
 <body>
 <main class="shell">
-<header><div><p class="eyebrow">PANTHER INTENT CAPTURE</p><h1>Make the next step clear.</h1><p class="header-note">Capture intention. Review evidence. Choose what happens next.</p></div><button id="refresh">Refresh</button></header>
+<header><div><p class="eyebrow">PANTHER INTENT CAPTURE</p><h1>Make the next step clear.</h1><p class="header-note">Review saved captures here. Start a new capture from Panther’s browser toolbar.</p></div><button id="refresh">Refresh</button></header>
 <section class="status-bar" aria-label="System status">
 <div><span class="dot" id="backendDot"></span><strong id="backendStatus">Connecting to local backend…</strong></div>
 <div><label for="deliveryDestination" class="muted">Delivery destination</label> <select id="deliveryDestination"></select> <span id="dashboardStatus">Checking ticket-service configuration…</span></div>
@@ -24,7 +24,7 @@
 <p class="muted">Session-authorized, unreviewed proposals. Delivery does not authorize execution. Cancellation cannot undo a request already in flight or remove tickets already delivered.</p>
 </section>
 <div class="actions"><button id="generate">Generate evidence draft</button><button id="generateAI">Generate with local AI</button><button id="export">Export JSON</button></div>
-<section class="companion-handoff" aria-label="Companion handoff"><div><p class="eyebrow">CONTINUE THE THINKING</p><h3>Explain this evidence in Companion</h3><p class="muted">Export a portable bundle, then import it in Companion. Your goal, observations and proposals stay distinct. No screenshots or raw event payloads are included.</p></div><div class="actions"><button id="exportCompanion" class="primary">Export for Companion</button><a href="http://127.0.0.1:8765" target="_blank" rel="noopener noreferrer">Open local Companion ↗</a></div><p class="muted">Requires Companion running on this computer. Nothing is sent automatically.</p></section>
+<section class="companion-handoff" aria-label="Companion handoff"><div><p class="eyebrow">CONTINUE IN COMPANION</p><h3>Turn this evidence into a next check</h3><p class="muted">Review and save your drafts below, then copy an intent bundle or download its JSON file. Your captured goal, observations and proposals stay distinct. No screenshots or raw event payloads are included.</p></div><div class="actions"><button id="copyCompanion" class="primary">Copy intent bundle</button><button id="exportCompanion">Download intent bundle</button><a href="http://127.0.0.1:8765" target="_blank" rel="noopener noreferrer">Open Companion ↗</a></div><p class="muted">In Companion, choose <strong>Import from Intent Capture</strong>, paste the bundle or choose the file, then preview before importing. Companion must be running. Nothing is sent automatically.</p></section>
 <details class="replay-tools"><summary>Replay exports</summary><p class="muted">Reviewable plans of the recorded path. Panther does not execute these files.</p><div class="actions"><button id="exportReplay">Export replay plan</button><button id="exportReplayScript">Export replay script</button></div></details>
 <p id="generationStatus" role="status" aria-live="polite"></p>
 <details open><summary>Observed interactions</summary><ol id="events"></ol></details>

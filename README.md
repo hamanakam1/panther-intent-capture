@@ -71,7 +71,7 @@ Video capture, audio capture, and media playback are disabled in this release. L
 
 ## Working beside Panther Companion
 
-Use the status window as a readable capture rail, then use the searchable review desk to check events and page-reported failures, edit expected outcomes, and export a portable intent bundle. **Export for Companion** prepares the existing schema `1.2` file for explicit import in Companion; it sends nothing automatically. Both tools remain useful on their own. See [the Companion workspace guide](docs/COMPANION_WORKSPACE.md) for the capture → review → next-action workflow and a practical ultrawide layout.
+Use the status window as a readable capture rail, then use the searchable review desk to check events and page-reported failures, edit expected outcomes, and export a portable intent bundle. **Copy intent bundle** and **Download intent bundle** prepare the existing schema `1.2` content for explicit preview and import in Companion; neither sends it automatically. Both tools remain useful on their own. See [the Companion workspace guide](docs/COMPANION_WORKSPACE.md) for the capture → review → next-action workflow and a practical ultrawide layout.
 
 ## Quick start
 

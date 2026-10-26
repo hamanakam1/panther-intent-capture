@@ -50,9 +50,10 @@ const drafts = id => ({mode: "observed", tickets: [{id: "draft-" + id, title: "R
 const job = (status, extras = {}) => ({status, target_url: "http://127.0.0.1:8080",
   ticket_count: 1, delivered_count: 0, attempts: 1, deliveries: [], ...extras});
 
-function fixture({initialJob = job("disabled"), initialStatus, screenshots = false, browserPower, confirmation = true} = {}) {
+function fixture({initialJob = job("disabled"), initialStatus, screenshots = false, browserPower, confirmation = true, clipboardWrite} = {}) {
   const elements = new Map(), responses = new Map(), calls = [], timers = new Map();
   let nextTimer = 0;
+  const clipboardWrites = [];
   const document = {
     visibilityState: "visible", listeners: {},
     getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
@@ -77,6 +78,7 @@ function fixture({initialJob = job("disabled"), initialStatus, screenshots = fal
   if (initialStatus) respond("GET", "automation/a", initialStatus);
   const context = vm.createContext({
     BACKEND_ORIGIN: "http://127.0.0.1:7890", document, console, Date, URL, Blob, AbortSignal,
+    navigator: {clipboard: {async writeText(value) {if (clipboardWrite) await clipboardWrite(value); clipboardWrites.push(value);}}},
     location: {protocol: browserPower ? "chrome-extension:" : "http:", origin: "http://127.0.0.1:7890", href: "http://127.0.0.1:7890/?recording=a"},
     chrome: {runtime: {sendMessage: async (message) => {
       assert.equal(message.type, "extension.getPowerState");
@@ -97,7 +99,7 @@ function fixture({initialJob = job("disabled"), initialStatus, screenshots = fal
   });
   const ready = vm.runInContext(`(async () => {\n${policySource}\n${optionsSource}\n})()`, context);
   return {
-    ready, calls, timers, respond,
+    ready, calls, timers, respond, clipboardWrites,
     get(id) { return document.getElementById(id); },
     fields() { return document.getElementById("tickets").querySelectorAll("input, textarea"); },
     draftButton(label) { return document.getElementById("tickets").querySelectorAll("button").find(node => node.textContent === label); },
@@ -421,4 +423,58 @@ test("review: previous view save must not clear unsaved edits after reopening sa
  pending.resolve({ok:true});await saving;
  assert.equal(f.get("unsavedNotice").hidden,false);
  assert.equal(f.get("exportCompanion").disabled,true);
+});
+
+test("explicit copy uses the saved export unchanged and never submits or reads clipboard", async () => {
+  const f = fixture(); await f.ready;
+  const bundle = {schema_version: "1.2", authority: {export_only: true, requires_review: true, execution_authorized: false}, tickets: [{title: "Reviewed wording", requires_review: true, execution_authorized: false}]};
+  f.respond("GET", "export/a", () => bundle);
+  assert.equal(f.clipboardWrites.length, 0);
+  await f.get("copyCompanion").click();
+  assert.deepEqual(JSON.parse(f.clipboardWrites[0]), bundle);
+  assert.match(f.get("message").textContent, /Intent bundle copied.*Paste bundle JSON.*Preview bundle/);
+  assert.match(f.get("message").textContent, /No data was sent automatically/);
+  assert.equal(f.calls.filter(call => call.path.includes("submit")).length, 0);
+});
+
+test("copy is disabled while draft edits remain unsaved", async () => {
+  const f = fixture(); await f.ready;
+  f.fields()[0].value = "Unsaved wording"; f.fields()[0].listeners.input();
+  assert.equal(f.get("copyCompanion").disabled, true);
+  await f.get("copyCompanion").click();
+  assert.equal(f.clipboardWrites.length, 0);
+  assert.equal(f.calls.filter(call => call.path === "export/a").length, 0);
+});
+
+test("copy rejects an old export even after changed wording was saved while it was pending", async () => {
+  const f = fixture(); await f.ready;
+  const pending = deferred(); f.respond("GET", "export/a", () => pending.promise);
+  const copying = f.get("copyCompanion").click(); await flush();
+  f.fields()[0].value = "New saved wording"; f.fields()[0].listeners.input();
+  f.respond("POST", "tickets/a/review", () => ({ok:true}));
+  await f.draftButton("Save draft edits").click();
+  pending.resolve({schema_version:"1.2",tickets:[]}); await copying;
+  assert.equal(f.clipboardWrites.length, 0);
+  assert.match(f.get("message").textContent, /changed while the export/);
+});
+
+test("denied clipboard access gives the file fallback without a false copied claim", async () => {
+  const f = fixture({clipboardWrite: async () => {throw new Error("NotAllowedError");}}); await f.ready;
+  f.respond("GET", "export/a", () => ({schema_version:"1.2",tickets:[]}));
+  await f.get("copyCompanion").click();
+  assert.equal(f.clipboardWrites.length, 0);
+  assert.match(f.get("message").textContent, /Could not copy.*Download intent bundle/);
+  assert.doesNotMatch(f.get("message").textContent, /Intent bundle copied/);
+  assert.equal(f.get("copyCompanion").disabled, false);
+});
+
+test("a change during the clipboard write is reported as an earlier copied version", async () => {
+  const pending = deferred(); const f = fixture({clipboardWrite: () => pending.promise}); await f.ready;
+  f.respond("GET", "export/a", () => ({schema_version:"1.2",tickets:[{title:"Earlier wording"}]}));
+  const copying = f.get("copyCompanion").click(); await flush();
+  f.fields()[0].value = "New wording"; f.fields()[0].listeners.input();
+  pending.resolve(); await copying;
+  assert.equal(f.clipboardWrites.length, 1);
+  assert.match(f.get("message").textContent, /saved version was copied.*changed.*copy again/);
+  assert.doesNotMatch(f.get("message").textContent, /Intent bundle copied/);
 });

@@ -183,7 +183,7 @@ async function refresh() {
   } catch (error) {
     $("backendStatus").textContent = "Local backend unavailable";
     $("backendDot").classList.remove("ok");
-    message(error.message + " — start backend/start.sh, then refresh.", true);
+    message(error.message + (browserControlled ? " — turn Panther on from its browser toolbar, then choose Refresh." : " — start the local review service or turn Panther on from its browser toolbar, then choose Refresh. This page does not start capture."), true);
   }
   try {
     const catalogue = await api("integrations");
@@ -315,7 +315,7 @@ async function generate(useAI) {
 }
 function syncUnsaved() {
   $("unsavedNotice").hidden = dirtyDrafts.size === 0;
-  for (const id of ["export", "exportCompanion"]) $(id).disabled = dirtyDrafts.size > 0 || exporting || loading || !selected || !browserPowerOn;
+  for (const id of ["export", "exportCompanion", "copyCompanion"]) $(id).disabled = dirtyDrafts.size > 0 || exporting || loading || !selected || !browserPowerOn;
 }
 function renderTickets(data, recordingId = selected.id) {
   const renderVersion = ++draftRenderVersion, viewVersion = requestVersion;
@@ -463,7 +463,7 @@ $("exportReplayScript").addEventListener("click", async () => {
     message("Replay script exported. It is a proposal to review; Panther never runs it.");
   } catch (error) { message(error.message, true); }
 });
-async function exportBundle(forCompanion = false) {
+async function exportBundle(forCompanion = false, copy = false) {
   if (!selected) return;
   if (dirtyDrafts.size) { message("Save draft edits before exporting so the bundle contains your reviewed wording.", true); return; }
   const id = selected.id, version = requestVersion, editVersion = draftEditVersion;
@@ -473,13 +473,30 @@ async function exportBundle(forCompanion = false) {
     const bundle = await api("export/" + id);
     if (version !== requestVersion || selected?.id !== id) return;
     if (dirtyDrafts.size || editVersion !== draftEditVersion) { message("The draft changed while the export was being prepared. Save your latest edits and export again.", true); return; }
-    download("panther-" + id + ".json", JSON.stringify(bundle, null, 2), "application/json");
-    message(forCompanion ? "Bundle exported. In Companion, choose Import capture and review this file before adding its evidence. No data was sent automatically." : "Draft bundle exported with saved wording. Export does not authorize execution or delivery.");
+    const serialized = JSON.stringify(bundle, null, 2);
+    if (copy) {
+      try {
+        if (typeof navigator === "undefined" || typeof navigator.clipboard?.writeText !== "function") throw new Error("Clipboard unavailable");
+        await navigator.clipboard.writeText(serialized);
+      } catch {
+        message("Could not copy to the clipboard. Choose Download intent bundle, then select that JSON file in Companion’s Import from Intent Capture dialog.", true);
+        return;
+      }
+      if (version !== requestVersion || selected?.id !== id || dirtyDrafts.size || editVersion !== draftEditVersion) {
+        message("A saved version was copied, but the draft or selected capture changed. Save your latest edits and copy again before importing.", true);
+        return;
+      }
+      message("Intent bundle copied. In Companion, choose Import from Intent Capture → Paste bundle JSON → Preview bundle. No data was sent automatically.");
+    } else {
+      download("panther-" + id + ".json", serialized, "application/json");
+      message(forCompanion ? "Bundle exported. In Companion, choose Import from Intent Capture → Choose JSON file, then preview it before importing. No data was sent automatically." : "Draft bundle exported with saved wording. Export does not authorize execution or delivery.");
+    }
   } catch (error) { if (version === requestVersion) message(error.message, true); }
   finally { exporting = false; syncUnsaved(); }
 }
 $("export").addEventListener("click", () => exportBundle());
 $("exportCompanion").addEventListener("click", () => exportBundle(true));
+$("copyCompanion").addEventListener("click", () => exportBundle(true, true));
 await refresh();
 const initial = new URL(location.href).searchParams.get("recording");
 if (initial && recordings.some(r => r.id === initial)) await openCapture(initial);
