@@ -105,7 +105,13 @@ Submitted tickets contain a bounded summary of intent, observed evidence, reprod
 
 For another system, use **Export JSON** and map the versioned intent bundle into that system's own draft or issue format. The capture and review workflow is independent of the destination. See [integration contracts and adapter guidance](docs/INTEGRATIONS.md) for the export shape, HTTP routes, retry behavior, and configuration.
 
-Use the [formal intent-bundle JSON Schema](schemas/intent-bundle.schema.json) to validate an importer against the supported version 1.0 contract. Schema validation does not verify a proposed bug or authorize execution.
+Use the [formal intent-bundle JSON Schema](schemas/intent-bundle.schema.json) to validate an importer against the supported version 1.2 contract. Schema validation does not verify a proposed bug or authorize execution.
+
+### Updating the installed source
+
+Source files, the loaded browser worker and the running local backend can have different versions. The toolbar reports them separately. New capture starts require the updated worker's status contract; the review desk stays read-only until the running backend confirms saved-edit persistence and intent bundle 1.2 support. A manual HTTP review workspace only needs a compatible backend. Status checks do not restart services, reload the extension or grant capture consent.
+
+Finish capture → Off → reload extension → On, then Refresh. Retry any retained upload before starting another capture. Review existing automatic-delivery receipts separately: an older session's frozen proposal may require fresh review or consent after an update. No update automatically resumes delivery or authorizes execution.
 
 ## Local AI and configuration
 

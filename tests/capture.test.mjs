@@ -928,3 +928,20 @@ test("captured goal is supplied only to trusted extension status, including afte
   assert.equal(publicSaved.result.goal, undefined);
   assert.equal(publicSaved.result.live, undefined);
 });
+
+test("trusted status reports loaded worker contract without leaking it to page status or rereading manifest", async () => {
+  const f = fixture();
+  f.api.runtime.getManifest = () => ({version: "1.7.0"});
+  f.restartWorker();
+  f.api.runtime.getManifest = () => ({version: "9.9.9"});
+  const state = await f.send("extension.getStatus");
+  assert.deepEqual(state.worker, {capture_contract: 2, app_version: "1.7.0"});
+  assert.equal(f.calls.inject.length, 0);
+  assert.equal(f.calls.fetch.length, 0);
+  const rejected = await f.send("extension.getStatus", {}, page);
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.worker, undefined);
+  await f.send("extension.startRecording", {tabId: 7, consent: true});
+  const pageState = await f.send("page.getStatus", {}, page);
+  assert.equal(pageState.worker, undefined);
+});

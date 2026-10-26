@@ -28,6 +28,18 @@ UI_ROOT = Path(__file__).resolve().parents[2] / "extension"
 UI_FILES = {"options/options.html", "options/options.js", "options/options.css", "options/automation-state.js", "shared/constants.js"}
 
 
+def _loaded_app_version():
+    """Snapshot package metadata once with this module, not hot-served UI files."""
+    try:
+        version = json.loads((UI_ROOT / "manifest.json").read_text()).get("version")
+        return version if isinstance(version, str) else "unknown"
+    except (OSError, ValueError):
+        return "unknown"
+
+
+APP_VERSION = _loaded_app_version()
+
+
 def _origin(handler):
     origin = handler.headers.get("Origin", "")
     try:
@@ -374,8 +386,8 @@ def handle_request(handler: BaseHTTPRequestHandler):
         parts = path[len(prefix):].strip("/").split("/")
         if parts == ["health"] and method == "GET":
             _json(handler, 200, {"status": "ok", "service": "panther-intent-capture-backend", "schema_version": API_VERSION,
-                                 "bundle_schema_version": SCHEMA_VERSION,
-                                 "capabilities": ["events", "screenshots", "diagnostics", "drafts", "json-export", "ticket-service", "automatic-delivery"]})
+                                 "app_version": APP_VERSION, "bundle_schema_version": SCHEMA_VERSION,
+                                 "capabilities": ["events", "screenshots", "diagnostics", "drafts", "json-export", "ticket-service", "automatic-delivery", "review-edit-persistence", "intent-bundle-1.2"]})
             return
         if parts == ["record"] and method == "POST":
             _record(handler)

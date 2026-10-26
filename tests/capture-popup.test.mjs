@@ -4,10 +4,12 @@ import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
 const script = (await readFile(new URL("../extension/popup/popup.js", import.meta.url), "utf8")).replace(/^import .*;\n/gm, "");
+const constantsSource = (await readFile(new URL("../extension/shared/constants.js", import.meta.url), "utf8")).replace(/^export /gm, "");
+const healthy = {status: "ok", service: "panther-intent-capture-backend", app_version: "1.7.0", schema_version: "1.1", bundle_schema_version: "1.2", capabilities: ["review-edit-persistence", "intent-bundle-1.2"]};
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 function fixture(initial, target = "http://127.0.0.1:8080", options = {}) {
-  const withPower = value => Object.hasOwn(value, "power") ? value : {...value, power: {state: "on", error: "", configured: true}};
+  const withPower = value => ({...(!options.legacyWorker ? {worker: {app_version: "1.7.0", capture_contract: 2}} : {}), ...value, power: Object.hasOwn(value, "power") ? value.power : {state: "on", error: "", configured: true}});
   let state = withPower(initial);
   let interval;
   const calls = [];
@@ -19,7 +21,7 @@ function fixture(initial, target = "http://127.0.0.1:8080", options = {}) {
     BACKEND_ORIGIN: "http://127.0.0.1:7890", loadConsentLog: async () => [], Date, console, AbortSignal, URL, encodeURIComponent,
     document: { getElementById: (id) => elements[id] ||= element(), createElement: element },
     setInterval: (fn) => { interval = fn; },
-    fetch: async (url) => { fetches.push(url); return options.fetch ? options.fetch(url) : { ok: true, json: async () => ({recordings: options.recordings || []}) }; }, confirm: () => true,
+    fetch: async (url) => { fetches.push(url); return options.fetch ? options.fetch(url) : { ok: true, json: async () => (url.endsWith("/health") ? healthy : {recordings: options.recordings || []}) }; }, confirm: () => true,
     chrome: options.noBrowser ? undefined : { tabs: { query: async () => options.page ? [options.page] : [{ id: 7, title: "Example page", url: "https://example.test/workflow" }] }, runtime: {
       id: "abcdefghijklmnopabcdefghijklmnop",
       sendMessage: async (message) => {
@@ -36,7 +38,7 @@ function fixture(initial, target = "http://127.0.0.1:8080", options = {}) {
       }
     } }
   });
-  vm.runInContext(script, context);
+  vm.runInContext(constantsSource + "\n" + script, context);
   return { elements, calls, fetches,
     respond(type, handler) { responses.set(type, handler); },
     setState(next) { state = withPower(next); },
@@ -618,4 +620,40 @@ test("saved review stays primary until another capture is explicitly prepared", 
   assert.equal(f.elements.recordBtn.hidden, false);
   assert.equal(f.elements.goalContext.hidden, true);
   assert.equal(f.calls.filter(call => call.type === "extension.startRecording").length, 0);
+});
+
+test("new popup with legacy loaded worker blocks Start while retaining Stop and Off", async () => {
+  const f = fixture({ok: true, enabled: true, status: "idle"}, undefined, {legacyWorker: true}); await flush();
+  assert.equal(f.elements.recordBtn.disabled, true);
+  assert.equal(f.elements.workerReadiness.hidden, false);
+  assert.match(f.elements.workerReadiness.textContent, /Finish capture → Off → reload extension → On/);
+  await f.elements.recordBtn.listeners.click();
+  assert.equal(f.calls.some(call => call.type === "extension.startRecording"), false);
+  f.state(recording()); await flush();
+  assert.equal(f.elements.stopBtn.disabled, false);
+  assert.equal(f.elements.turnOffBtn.disabled, false);
+  await f.click("stopBtn");
+  assert.ok(f.calls.some(call => call.type === "extension.stopRecording"));
+});
+
+test("new loaded worker and legacy backend are reported separately without inferred readiness", async () => {
+  const f = fixture({ok: true, enabled: true, status: "idle"}, undefined, {fetch: async url => ({ok: true, json: async () => url.endsWith("/health") ? {status: "ok", service: "panther-intent-capture-backend", schema_version: "1.0"} : {recordings: []}})});
+  await flush();
+  assert.equal(f.elements.workerReadiness.hidden, true);
+  assert.equal(f.elements.backendBanner.hidden, false);
+  assert.match(f.elements.backendBanner.textContent, /local service needs an update/);
+  assert.match(f.elements.loadedVersions.textContent, /Loaded capture worker: 1.7.0.*Running backend: unknown/);
+  assert.equal(f.calls.some(call => /turnOn|turnOff|startRecording/.test(call.type)), false);
+});
+
+test("a late old health response cannot overwrite the popup's latest compatible check", async () => {
+  let resolveOld; let healthCalls = 0;
+  const old = new Promise(resolve => {resolveOld = resolve;});
+  const f = fixture({ok: true, enabled: true, status: "idle"}, undefined, {fetch: async url => ({ok: true, json: async () => url.endsWith("/health") ? (++healthCalls === 1 ? old : healthy) : {recordings: []}})});
+  await flush();
+  await f.click("refreshStatus"); await flush();
+  assert.equal(f.elements.backendBanner.hidden, true);
+  resolveOld({status: "ok", service: "panther-intent-capture-backend", schema_version: "1.0"}); await flush();
+  assert.equal(f.elements.backendBanner.hidden, true);
+  assert.match(f.elements.loadedVersions.textContent, /Running backend: 1.7.0/);
 });

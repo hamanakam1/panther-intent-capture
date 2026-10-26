@@ -7,6 +7,8 @@ const optionsSource = (await readFile(new URL("../extension/options/options.js",
   .replace(/^import .*;\n/gm, "");
 const policySource = (await readFile(new URL("../extension/options/automation-state.js", import.meta.url), "utf8"))
   .replace(/^export /gm, "");
+const constantsSource = (await readFile(new URL("../extension/shared/constants.js", import.meta.url), "utf8")).replace(/^export /gm, "");
+const healthy = {status: "ok", service: "panther-intent-capture-backend", app_version: "1.7.0", schema_version: "1.1", bundle_schema_version: "1.2", capabilities: ["review-edit-persistence", "intent-bundle-1.2"]};
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => {
   let resolve, reject;
@@ -50,7 +52,9 @@ const drafts = id => ({mode: "observed", tickets: [{id: "draft-" + id, title: "R
 const job = (status, extras = {}) => ({status, target_url: "http://127.0.0.1:8080",
   ticket_count: 1, delivered_count: 0, attempts: 1, deliveries: [], ...extras});
 
-function fixture({initialJob = job("disabled"), initialStatus, screenshots = false, browserPower, confirmation = true, clipboardWrite} = {}) {
+const legacyHealth = {status: "ok", service: "panther-intent-capture-backend", schema_version: "1.0", capabilities: ["drafts", "json-export"]};
+
+function fixture({initialJob = job("disabled"), initialStatus, screenshots = false, browserPower, confirmation = true, clipboardWrite, initialHealth = healthy} = {}) {
   const elements = new Map(), responses = new Map(), calls = [], timers = new Map();
   let nextTimer = 0;
   const clipboardWrites = [];
@@ -63,7 +67,7 @@ function fixture({initialJob = job("disabled"), initialStatus, screenshots = fal
   const respond = (method, path, handler) => responses.set(method + " " + path, handler);
   const recordings = [capture("a"), capture("b")];
   if (screenshots) recordings[0].screenshot_count = 1;
-  respond("GET", "health", () => ({status: "ok"}));
+  respond("GET", "health", () => typeof initialHealth === "function" ? initialHealth() : initialHealth);
   respond("GET", "recordings", () => ({recordings}));
   respond("GET", "integrations", () => ({destinations: [{ kind: "ticket-service", label: "Local ticket service",
     available: true, configured: true, state: "reachable", url: "http://127.0.0.1:8080", error: "" }]}));
@@ -97,7 +101,7 @@ function fixture({initialJob = job("disabled"), initialStatus, screenshots = fal
       return {ok: true, status: 200, async json() { return structuredClone(body); }};
     }
   });
-  const ready = vm.runInContext(`(async () => {\n${policySource}\n${optionsSource}\n})()`, context);
+  const ready = vm.runInContext(`(async () => {\n${constantsSource}\n${policySource}\n${optionsSource}\n})()`, context);
   return {
     ready, calls, timers, respond, clipboardWrites,
     get(id) { return document.getElementById(id); },
@@ -329,7 +333,7 @@ test("Companion export blocks unsaved wording and exports only after saved edits
   f.respond("POST", "tickets/a/review", () => ({ok: true}));
   await f.draftButton("Save draft edits").click();
   assert.equal(f.get("unsavedNotice").hidden, true);
-  f.respond("GET", "export/a", () => ({schema_version: "1.2", tickets: []}));
+  f.respond("GET", "export/a", () => ({authority: {export_only: true, requires_review: true, execution_authorized: false}, schema_version: "1.2", tickets: []}));
   await f.get("exportCompanion").click();
   assert.equal(f.calls.filter(call => call.path === "export/a").length, 1);
   assert.match(f.get("message").textContent, /No data was sent automatically/);
@@ -376,7 +380,7 @@ test("edits made while export is pending require a fresh saved export", async ()
   const pending = deferred(); f.respond("GET", "export/a", () => pending.promise);
   const exporting = f.get("exportCompanion").click(); await flush();
   const title = f.fields()[0]; title.value = "New wording"; title.listeners.input();
-  pending.resolve({schema_version: "1.2", tickets: []}); await exporting;
+  pending.resolve({authority: {export_only: true, requires_review: true, execution_authorized: false}, schema_version: "1.2", tickets: []}); await exporting;
   assert.match(f.get("message").textContent, /changed while the export/);
   assert.doesNotMatch(f.get("message").textContent, /Bundle exported/);
 });
@@ -410,7 +414,7 @@ test("review: export must reject an edit that was saved while export was pending
  const title=f.fields()[0];title.value="New saved wording";title.listeners.input();
  f.respond("POST","tickets/a/review",()=>({ok:true}));
  await f.draftButton("Save draft edits").click();
- pending.resolve({schema_version:"1.2",tickets:[{title:"OLD WORDING"}]}); await exporting;
+ pending.resolve({authority: {export_only: true, requires_review: true, execution_authorized: false}, schema_version:"1.2",tickets:[{title:"OLD WORDING"}]}); await exporting;
  assert.doesNotMatch(f.get("message").textContent,/Bundle exported/);
 });
 test("review: previous view save must not clear unsaved edits after reopening same capture", async () => {
@@ -427,7 +431,7 @@ test("review: previous view save must not clear unsaved edits after reopening sa
 
 test("explicit copy uses the saved export unchanged and never submits or reads clipboard", async () => {
   const f = fixture(); await f.ready;
-  const bundle = {schema_version: "1.2", authority: {export_only: true, requires_review: true, execution_authorized: false}, tickets: [{title: "Reviewed wording", requires_review: true, execution_authorized: false}]};
+  const bundle = {authority: {export_only: true, requires_review: true, execution_authorized: false}, schema_version: "1.2", authority: {export_only: true, requires_review: true, execution_authorized: false}, tickets: [{title: "Reviewed wording", requires_review: true, execution_authorized: false}]};
   f.respond("GET", "export/a", () => bundle);
   assert.equal(f.clipboardWrites.length, 0);
   await f.get("copyCompanion").click();
@@ -453,14 +457,14 @@ test("copy rejects an old export even after changed wording was saved while it w
   f.fields()[0].value = "New saved wording"; f.fields()[0].listeners.input();
   f.respond("POST", "tickets/a/review", () => ({ok:true}));
   await f.draftButton("Save draft edits").click();
-  pending.resolve({schema_version:"1.2",tickets:[]}); await copying;
+  pending.resolve({authority: {export_only: true, requires_review: true, execution_authorized: false}, schema_version:"1.2",tickets:[]}); await copying;
   assert.equal(f.clipboardWrites.length, 0);
   assert.match(f.get("message").textContent, /changed while the export/);
 });
 
 test("denied clipboard access gives the file fallback without a false copied claim", async () => {
   const f = fixture({clipboardWrite: async () => {throw new Error("NotAllowedError");}}); await f.ready;
-  f.respond("GET", "export/a", () => ({schema_version:"1.2",tickets:[]}));
+  f.respond("GET", "export/a", () => ({authority: {export_only: true, requires_review: true, execution_authorized: false}, schema_version:"1.2",tickets:[]}));
   await f.get("copyCompanion").click();
   assert.equal(f.clipboardWrites.length, 0);
   assert.match(f.get("message").textContent, /Could not copy.*Download intent bundle/);
@@ -470,11 +474,73 @@ test("denied clipboard access gives the file fallback without a false copied cla
 
 test("a change during the clipboard write is reported as an earlier copied version", async () => {
   const pending = deferred(); const f = fixture({clipboardWrite: () => pending.promise}); await f.ready;
-  f.respond("GET", "export/a", () => ({schema_version:"1.2",tickets:[{title:"Earlier wording"}]}));
+  f.respond("GET", "export/a", () => ({authority: {export_only: true, requires_review: true, execution_authorized: false}, schema_version:"1.2",tickets:[{title:"Earlier wording"}]}));
   const copying = f.get("copyCompanion").click(); await flush();
   f.fields()[0].value = "New wording"; f.fields()[0].listeners.input();
   pending.resolve(); await copying;
   assert.equal(f.clipboardWrites.length, 1);
   assert.match(f.get("message").textContent, /saved version was copied.*changed.*copy again/);
   assert.doesNotMatch(f.get("message").textContent, /Intent bundle copied/);
+});
+
+test("new review UI keeps legacy service captures readable but blocks edits and handoff", async () => {
+  const f = fixture({initialHealth: legacyHealth}); await f.ready;
+  assert.ok(f.fields().length > 0);
+  assert.ok(f.fields().every(field => field.disabled));
+  for (const id of ["generate", "generateAI", "export", "copyCompanion", "exportCompanion", "exportReplay"]) assert.equal(f.get(id).disabled, true, id);
+  assert.match(f.get("backendReadiness").textContent, /Finish capture → Off → reload extension → On/);
+  assert.match(f.get("backendStatus").textContent, /unknown.*read-only/);
+  assert.equal(f.calls.filter(call => call.method !== "GET").length, 0);
+  await f.draftButton("Save draft edits").listeners.click();
+  await f.get("copyCompanion").listeners.click();
+  assert.equal(f.calls.filter(call => call.method !== "GET" || call.path.startsWith("export/")).length, 0);
+  assert.equal(f.clipboardWrites.length, 0);
+});
+
+test("compatible manual HTTP review works without browser worker and rechecks before a write", async () => {
+  const f = fixture(); await f.ready;
+  assert.equal(f.get("backendReadiness").hidden, true);
+  assert.equal(f.get("generate").disabled, false);
+  f.respond("GET", "health", () => legacyHealth);
+  await f.draftButton("Save draft edits").click();
+  assert.equal(f.calls.filter(call => call.method === "POST").length, 0);
+  assert.equal(f.get("copyCompanion").disabled, true);
+  assert.match(f.get("message").textContent, /cannot confirm safe draft edits/);
+});
+
+test("a stale healthy response cannot restore readiness after a newer legacy response", async () => {
+  const f = fixture(); await f.ready;
+  const old = deferred(); let checks = 0;
+  f.respond("GET", "health", () => ++checks === 1 ? old.promise : legacyHealth);
+  const first = f.get("refresh").click(); await flush();
+  await f.get("refresh").click();
+  old.resolve(healthy); await first;
+  assert.equal(f.get("copyCompanion").disabled, true);
+  assert.ok(f.fields().every(field => field.disabled));
+  assert.equal(f.get("backendReadiness").hidden, false);
+});
+
+test("service replacement with old export after a compatible health check cannot copy", async () => {
+  const f = fixture(); await f.ready;
+  f.respond("GET", "export/a", () => ({schema_version: "1.0", tickets: []}));
+  await f.get("copyCompanion").click();
+  assert.equal(f.clipboardWrites.length, 0);
+  assert.match(f.get("message").textContent, /incompatible intent bundle/);
+});
+
+test("legacy service retains cancellation but never enables a delivery retry", async () => {
+  const f = fixture({initialHealth: legacyHealth, initialJob: job("retry_wait")}); await f.ready;
+  assert.equal(f.get("retryAutomation").disabled, true);
+  assert.equal(f.get("cancelAutomation").disabled, false);
+  f.respond("POST", "automation/a", () => job("cancelled"));
+  await f.get("cancelAutomation").click();
+  assert.deepEqual(f.calls.filter(call => call.method === "POST").map(call => call.body), [{action: "cancel"}]);
+});
+
+test("unconfirmed health still allows saved capture inspection when read routes respond", async () => {
+  const f = fixture({initialHealth: () => {throw new Error("Health unavailable");}});
+  await f.ready;
+  assert.ok(f.fields().length > 0);
+  assert.ok(f.fields().every(field => field.disabled));
+  assert.equal(f.get("backendReadiness").hidden, false);
 });

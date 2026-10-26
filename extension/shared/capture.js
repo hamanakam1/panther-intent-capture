@@ -58,6 +58,8 @@ export function pantherDiagnosticRelay(nonce) {
 
 /** Persist before acknowledging: a Chromium service worker can stop at any time. */
 export function createCaptureController(api, fetcher, now = Date.now, { isPowered = () => false } = {}) {
+  // Snapshotted by this worker, not inferred from newly hot-served UI assets.
+  const worker = {capture_contract: 2, app_version: api.runtime.getManifest?.().version || "unknown"};
   let queue = Promise.resolve();
   let pollQueued = false;
   let frozen = false;
@@ -150,6 +152,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
         cancelRequested: session.cancelRequested === true, cancellationConfirmed: session.cancellationConfirmed === true
       } : null,
       result: publicResult,
+      ...(includeGoal ? {worker: {...worker}} : {}),
       ...(includeLive ? { live: session ? buildLiveActivity(session) : sanitizeLiveActivity(result?.live) } : {})
     };
   };

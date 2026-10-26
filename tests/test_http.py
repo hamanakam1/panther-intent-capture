@@ -218,8 +218,19 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(health["status"], "ok")
         self.assertIn("diagnostics", health["capabilities"])
+        self.assertIn("review-edit-persistence", health["capabilities"])
+        self.assertIn("intent-bundle-1.2", health["capabilities"])
+        self.assertRegex(health["app_version"], r"^\d+\.\d+\.\d+$")
         self.assertEqual(health["bundle_schema_version"], integrations.SCHEMA_VERSION)
         self.assertRegex(health["schema_version"], r"^\d+\.\d+$")
+
+    def test_health_version_is_loaded_once_and_status_has_no_mutation(self):
+        before = storage.list_recordings()
+        with patch.object(Path, "read_text", side_effect=AssertionError("health must not reread source files")):
+            code, health, _ = self.request("/api/extension/health")
+        self.assertEqual(code, 200)
+        self.assertEqual(health["app_version"], routes.APP_VERSION)
+        self.assertEqual(storage.list_recordings(), before)
 
     def test_consent_and_malformed_inputs_are_rejected(self):
         for changes in ({"consent": False}, {"events": {}}, {"sessionId": ""}, {"startTime": -1},

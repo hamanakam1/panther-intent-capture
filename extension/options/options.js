@@ -1,4 +1,4 @@
-import { BACKEND_ORIGIN } from "../shared/constants.js";
+import { BACKEND_ORIGIN, backendReadiness, UPDATE_GUIDANCE } from "../shared/constants.js";
 import { automationView, safeTicketURL } from "./automation-state.js";
 
 const origin = location.protocol === "chrome-extension:" ? BACKEND_ORIGIN : location.origin;
@@ -11,6 +11,7 @@ let recordings = [];
 let activePreview = null;
 let loading = false;
 let exporting = false;
+let deliverySending = false;
 let draftRenderVersion = 0;
 let draftEditVersion = 0;
 let requestVersion = 0;
@@ -22,12 +23,48 @@ let deliveryKind = "";
 let automationRequest = 0;
 let automationControlBusy = false;
 const busyButtons = new WeakSet();
+let readiness = backendReadiness(null);
+let healthRequest = 0;
+
+function renderReadiness() {
+  $("backendReadiness").hidden = readiness.ready;
+  $("backendReadiness").textContent = (readiness.connected ? "Local service update required. " : "Review compatibility is unconfirmed. ")
+    + "You can inspect saved captures. Editing, generation, delivery retries and exports are paused. " + UPDATE_GUIDANCE;
+  $("backendStatus").textContent = readiness.ready ? "Local backend " + readiness.version + " · review ready"
+    : readiness.connected ? "Local backend " + readiness.version + " · read-only review" : "Local backend unconfirmed";
+  $("backendDot").classList.toggle("ok", readiness.ready);
+  syncDraftControls();
+}
+async function checkReadiness() {
+  const request = ++healthRequest;
+  readiness = backendReadiness(null); renderReadiness();
+  try {
+    const health = await api("health");
+    if (request !== healthRequest) {
+      const error = new Error("A newer connection check is in progress. Try again after it finishes.");
+      error.stale = true; throw error;
+    }
+    readiness = backendReadiness(health); renderReadiness();
+    return readiness;
+  } catch (error) {
+    if (request === healthRequest) { readiness = backendReadiness(null); renderReadiness(); }
+    throw error;
+  }
+}
+function requiresReviewContract(path, method, body) {
+  return path.startsWith("export/") || /\breplay(?:\?|$)/.test(path)
+    || (method !== "GET" && (path.startsWith("tickets/") || path.startsWith("integrations/")
+      || (path.startsWith("automation/") && body?.action !== "cancel")));
+}
 
 function message(text, error = false) {
   $("message").textContent = text;
   $("message").classList.toggle("error", error);
 }
 async function api(path, body, method = body === undefined ? "GET" : "POST") {
+  if (requiresReviewContract(path, method, body) && !(await checkReadiness()).ready) {
+    throw new Error("This local service cannot confirm safe draft edits and intent bundles. " + UPDATE_GUIDANCE);
+  }
   if (browserControlled) {
     try {
       const state = await chrome.runtime.sendMessage({type: "extension.getPowerState"});
@@ -37,7 +74,7 @@ async function api(path, body, method = body === undefined ? "GET" : "POST") {
     if (!browserPowerOn) throw new Error("Panther is off. Turn Panther on from its browser popup, then refresh this page.");
   }
   const response = await fetch(origin + "/api/extension/" + path, {
-    method, headers: { "Content-Type": "application/json", "X-Panther-Client": "review-v1" },
+    method, cache: "no-store", headers: { "Content-Type": "application/json", "X-Panther-Client": "review-v1" },
     ...(body === undefined ? {} : {body: JSON.stringify(body)}),
     signal: AbortSignal.timeout(path.startsWith("tickets/") ? 125000 : 30000)
   });
@@ -63,9 +100,12 @@ function button(label, action, className = "") {
   return node;
 }
 function syncDraftControls() {
-  const locked = !browserPowerOn || loading || (selected && automationView(automation, automationStale).locked);
+  const locked = !browserPowerOn || !readiness.ready || loading || (selected && automationView(automation, automationStale).locked);
   $("generate").disabled = Boolean(locked); $("generateAI").disabled = Boolean(locked);
   for (const node of $("tickets").querySelectorAll("input, textarea, button")) node.disabled = Boolean(locked || busyButtons.has(node));
+  for (const id of ["exportReplay", "exportReplayScript"]) $(id).disabled = !browserPowerOn || !readiness.ready || !selected;
+  $("retryAutomation").disabled = automationControlBusy || !readiness.ready;
+  $("confirmSend").disabled = !readiness.ready || !activePreview || deliverySending;
   syncUnsaved();
 }
 function renderAutomation() {
@@ -174,9 +214,12 @@ async function renderDiagnostics(id, version) {
 }
 async function refresh() {
   try {
-    const health = await api("health");
-    $("backendStatus").textContent = health.status === "ok" ? "Local backend connected" : "Backend needs attention";
-    $("backendDot").classList.toggle("ok", health.status === "ok");
+    await checkReadiness();
+  } catch (error) {
+    if (error.stale) return;
+    message(error.message + " — choose Refresh after restoring the local connection.", true);
+  }
+  try {
     recordings = (await api("recordings")).recordings;
     renderLibrary();
     message(recordings.length ? "Captures are ready to review." : "No captures yet. Open the extension on a web page to start.");
@@ -315,7 +358,7 @@ async function generate(useAI) {
 }
 function syncUnsaved() {
   $("unsavedNotice").hidden = dirtyDrafts.size === 0;
-  for (const id of ["export", "exportCompanion", "copyCompanion"]) $(id).disabled = dirtyDrafts.size > 0 || exporting || loading || !selected || !browserPowerOn;
+  for (const id of ["export", "exportCompanion", "copyCompanion"]) $(id).disabled = dirtyDrafts.size > 0 || exporting || loading || !selected || !browserPowerOn || !readiness.ready;
 }
 function renderTickets(data, recordingId = selected.id) {
   const renderVersion = ++draftRenderVersion, viewVersion = requestVersion;
@@ -408,6 +451,7 @@ $("deliveryDestination").addEventListener("change", () => {
 });
 $("confirmSend").addEventListener("click", async () => {
   if (!activePreview) return;
+  deliverySending = true;
   $("confirmSend").disabled = true;
   $("deliveryStatus").classList.remove("error");
   $("deliveryStatus").textContent = "Sending and verifying the dashboard ticket…";
@@ -432,7 +476,7 @@ $("confirmSend").addEventListener("click", async () => {
     if (activePreview !== pendingPreview) return;
     $("deliveryStatus").textContent = error.message + " — Retry preserves the same ticket identity.";
     $("deliveryStatus").classList.add("error");
-  } finally { if (activePreview === pendingPreview) $("confirmSend").disabled = false; }
+  } finally { deliverySending = false; if (activePreview === pendingPreview) $("confirmSend").disabled = !readiness.ready; }
 });
 $("deleteCapture").addEventListener("click", async () => {
   if (!selected || !confirm("Delete this capture and its local evidence? Tickets already sent to other systems remain there.")) return;
@@ -471,6 +515,7 @@ async function exportBundle(forCompanion = false, copy = false) {
   exporting = true; syncUnsaved();
   try {
     const bundle = await api("export/" + id);
+    if (bundle?.schema_version !== "1.2" || bundle.authority?.execution_authorized !== false || bundle.authority?.requires_review !== true || bundle.authority?.export_only !== true) throw new Error("The service returned an incompatible intent bundle. Nothing was copied or downloaded. " + UPDATE_GUIDANCE);
     if (version !== requestVersion || selected?.id !== id) return;
     if (dirtyDrafts.size || editVersion !== draftEditVersion) { message("The draft changed while the export was being prepared. Save your latest edits and export again.", true); return; }
     const serialized = JSON.stringify(bundle, null, 2);
