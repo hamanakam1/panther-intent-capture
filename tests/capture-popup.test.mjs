@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 const script = (await readFile(new URL("../extension/popup/popup.js", import.meta.url), "utf8")).replace(/^import .*;\n/gm, "");
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-function fixture(initial, target = "http://127.0.0.1:8080") {
+function fixture(initial, target = "http://127.0.0.1:8080", options = {}) {
   const withPower = value => Object.hasOwn(value, "power") ? value : {...value, power: {state: "on", error: "", configured: true}};
   let state = withPower(initial);
   let interval;
@@ -14,13 +14,13 @@ function fixture(initial, target = "http://127.0.0.1:8080") {
   const fetches = [];
   const responses = new Map();
   const elements = {};
-  const element = () => ({ hidden: false, disabled: false, checked: false, value: "", textContent: "", listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; }, replaceChildren() {} });
+  const element = () => ({ hidden: false, disabled: false, checked: false, value: "", textContent: "", listeners: {}, children: [], addEventListener(type, fn) { this.listeners[type] = fn; }, replaceChildren(...nodes) { this.children = nodes; }, append(...nodes) {this.children.push(...nodes);} });
   const context = vm.createContext({
-    BACKEND_ORIGIN: "http://127.0.0.1:7890", loadConsentLog: async () => [], Date, console, AbortSignal,
+    BACKEND_ORIGIN: "http://127.0.0.1:7890", loadConsentLog: async () => [], Date, console, AbortSignal, URL, encodeURIComponent,
     document: { getElementById: (id) => elements[id] ||= element(), createElement: element },
     setInterval: (fn) => { interval = fn; },
-    fetch: async (url) => { fetches.push(url); return { ok: true }; }, confirm: () => true,
-    chrome: { tabs: { query: async () => [{ id: 7 }] }, runtime: {
+    fetch: async (url) => { fetches.push(url); return options.fetch ? options.fetch(url) : { ok: true, json: async () => ({recordings: options.recordings || []}) }; }, confirm: () => true,
+    chrome: options.noBrowser ? undefined : { tabs: { query: async () => options.page ? [options.page] : [{ id: 7, title: "Example page", url: "https://example.test/workflow" }] }, runtime: {
       id: "abcdefghijklmnopabcdefghijklmnop",
       sendMessage: async (message) => {
         calls.push(structuredClone(message));
@@ -28,7 +28,9 @@ function fixture(initial, target = "http://127.0.0.1:8080") {
           const result = await responses.get(message.type)(message);
           return result?.status ? withPower(result) : result;
         }
-        if (message.type === "extension.getAutomationTarget") return target ? { ok: true, url: target } : { ok: false, error: "Backend offline; destination unknown." };
+        if (message.type === "extension.getAutomationTarget") return target
+          ? { ok: true, destinations: [{ kind: "ticket-service", label: "Local ticket service", available: true, configured: true, state: "reachable", url: target, error: "" }] }
+          : { ok: false, error: "Backend offline; destination unknown." };
         if (message.type === "extension.getPowerState") return {ok: true, power: structuredClone(state.power)};
         return structuredClone(state);
       }
@@ -138,7 +140,7 @@ test("screenshot warnings remain visible independently of a successful save or g
   assert.equal(f.elements.warning.textContent, state.session.warning);
 });
 
-const policy = { enabled: true, consent: true, target_url: "http://127.0.0.1:8080", use_ai: false, max_tickets: 5 };
+const policy = { enabled: true, consent: true, target_kind: "ticket-service", target_url: "http://127.0.0.1:8080", use_ai: false, max_tickets: 5 };
 const automatic = (status = "queued") => ({ ok: true, enabled: true, status: "automation", session: null,
   result: { id: "rec", eventCount: 3, automationPolicy: { ...policy }, automationCheckedAt: 1700000000000,
     automation: { status, stage: "delivery", ticket_count: 2, delivered_count: 1 }, error: "" } });
@@ -176,6 +178,7 @@ test("previous terminal delivery retains its receipt target while new consent sh
   assert.match(f.elements.automationTarget.textContent, /127.0.0.1:9999/);
   assert.doesNotMatch(f.elements.automationTarget.textContent, /fixed for this session/);
   assert.match(f.elements.meta.textContent, /127.0.0.1:8080/);
+  await f.click("newCaptureBtn");
   assert.equal(f.elements.recordBtn.hidden, false);
   f.elements.automation.checked = true; f.elements.automation.listeners.change();
   await f.click("recordBtn");
@@ -324,9 +327,9 @@ test("Turn on starts only the runtime, checks its destination once, and requires
   assert.equal(f.calls.filter(call => call.type === "extension.turnOn").length, 1);
   assert.equal(f.calls.filter(call => call.type === "extension.getAutomationTarget").length, 1);
   assert.equal(f.calls.some(call => call.type === "extension.startRecording"), false);
-  assert.equal(f.fetches.length, 1);
+  assert.equal(f.fetches.length, 2); // Read-only health and recent captures, only after explicit On.
   f.poll(); f.poll(); await flush();
-  assert.equal(f.fetches.length, 1);
+  assert.equal(f.fetches.length, 2);
   assert.match(f.elements.powerHelp.textContent, /Stop & deliver leaves Panther on/);
 });
 
@@ -424,7 +427,7 @@ test("destination discovery finishing after Turn off cannot enable automation", 
     f.setState(idlePower()); return {ok: true, power: powerState("off")};
   });
   await f.click("turnOffBtn");
-  finishTarget({ok: true, url: "http://127.0.0.1:9999"}); await flush();
+  finishTarget({ok: true, destinations: [{ kind: "ticket-service", label: "Local ticket service", available: true, configured: true, state: "reachable", url: "http://127.0.0.1:9999", error: "" }]}); await flush();
   assert.equal(f.elements.automation.disabled, true);
   assert.doesNotMatch(f.elements.automationTarget.textContent, /9999/);
   assert.equal(f.elements.backendBanner.hidden, true);
@@ -461,7 +464,158 @@ test("power controls precede capture controls and setup links only to the docume
   assert.ok(html.indexOf('id="turnOffBtn"') < html.indexOf('id="recordBtn"'));
   assert.match(html, /https:\/\/github\.com\/hamanakam1\/panther-intent-capture\/blob\/main\/docs\/BROWSER_CONTROL\.md/);
   assert.match(html, /Stop saves or delivers this session and leaves Panther on/);
-  assert.match(html, /Turn Panther off stops capture, cancels remaining automatic delivery, and preserves unsaved events/);
+  assert.match(html, /Turning Panther off stops capture, cancels remaining automatic delivery, and preserves unsaved events/);
   const css = await readFile(new URL("../extension/popup/popup.css", import.meta.url), "utf8");
-  assert.match(css, /\.power-card\s*\{[^}]*position:\s*sticky/);
+  assert.match(css, /\.topbar\s*\{[^}]*position:\s*sticky/);
+});
+
+test("dashboard shows session counts with current versus historical meaning", async () => {
+  const state = recording(true); state.session.url = "https://example.test/settings?private=ignored";
+  const f = fixture(state); await flush();
+  assert.equal(f.elements.eventMetric.textContent, "3");
+  assert.equal(f.elements.screenshotMetric.textContent, "1");
+  assert.equal(f.elements.draftMetric.textContent, "—");
+  assert.equal(f.elements.metricScope.textContent, "CURRENT SESSION");
+  assert.equal(f.elements.pageTitle.textContent, "example.test/settings");
+  assert.equal(f.elements.captureSetup.hidden, true);
+  assert.match(f.elements.nextTitle.textContent, /Work through/);
+  f.state({...state, power: powerState("off")}); await flush();
+  assert.equal(f.elements.eventMetric.textContent, "3");
+  assert.match(f.elements.metricScope.textContent, /NOT LIVE/);
+  assert.match(f.elements.sessionNote.textContent, /historical/);
+  assert.match(f.elements.pageDetail.textContent, /not running/);
+});
+
+test("dashboard blocks browser-internal pages with an actionable explanation", async () => {
+  const f = fixture({...idlePower("on"), enabled: true}, undefined, {page: {id: 7, title: "Settings", url: "chrome://settings"}}); await flush();
+  assert.equal(f.elements.recordBtn.disabled, true);
+  assert.match(f.elements.nextTitle.textContent, /regular webpage/);
+  assert.match(f.elements.pageDetail.textContent, /cannot be captured/);
+  await f.elements.recordBtn.listeners.click();
+  assert.equal(f.calls.filter(call => call.type === "extension.startRecording").length, 0);
+});
+
+test("dashboard loads only three recent captures and opens review without capture authority", async () => {
+  const recordings = Array.from({length: 4}, (_, i) => ({id: `capture/${i}`, title: `Saved <capture> ${i}`, event_count: i, start_time: 1700000000}));
+  const f = fixture(idlePower("on"), undefined, {recordings}); await flush();
+  assert.equal(f.elements.recentCaptures.children.length, 3);
+  const first = f.elements.recentCaptures.children[0];
+  assert.equal(first.href, "../options/options.html?recording=capture%2F0");
+  assert.equal(first.children[0].textContent, "Saved <capture> 0");
+  assert.equal(first.target, "_blank");
+  assert.ok(f.calls.every(call => ["extension.getStatus", "extension.getAutomationTarget"].includes(call.type)));
+  assert.match(f.elements.helperHealth.textContent, /connected/);
+});
+
+test("recent-capture response arriving after Off cannot restore backend information", async () => {
+  let resolveRecent;
+  const pending = new Promise(resolve => {resolveRecent = resolve;});
+  const f = fixture(idlePower("on"), undefined, {fetch: async url => url.endsWith("/recordings") ? pending : {ok: true}}); await flush();
+  f.state(idlePower("off")); await flush();
+  resolveRecent({ok: true, json: async () => ({recordings: [{id: "old", title: "Old response"}]})}); await flush();
+  assert.equal(f.elements.recentCaptures.children.length, 0);
+  assert.match(f.elements.recentStatus.textContent, /No service request/);
+});
+
+test("unavailable recent captures name a recovery action without claiming an empty store", async () => {
+  const f = fixture(idlePower("on"), undefined, {fetch: async url => ({ok: !url.endsWith("/recordings")})}); await flush();
+  assert.match(f.elements.recentStatus.textContent, /unavailable.*Refresh/);
+  assert.doesNotMatch(f.elements.recentStatus.textContent, /No saved captures/);
+});
+
+test("legacy worker target is only a configured ticket service, with reachability unconfirmed", async () => {
+  const f = fixture(idlePower("on"));
+  f.respond("extension.getAutomationTarget", () => ({ok: true, url: "http://127.0.0.1:8080"})); await flush();
+  assert.equal(f.elements.automationDestination.children.length, 1);
+  assert.equal(f.elements.automationDestination.children[0].value, "ticket-service");
+  assert.match(f.elements.automationDestination.children[0].textContent, /reachability not checked/);
+  assert.match(f.elements.automationTarget.textContent, /reachability not checked/);
+  assert.equal(f.elements.automation.checked, false);
+  assert.equal(f.elements.automationAI.checked, false);
+  assert.equal(f.calls.filter(call => /startRecording|setEnabled|turnOn/.test(call.type)).length, 0);
+});
+
+test("malformed or credentialed legacy destination cannot enable automatic delivery", async () => {
+  for (const url of ["javascript:alert(1)", "http://secret:password@127.0.0.1:8080", "not a URL"]) {
+    const f = fixture(idlePower("on"));
+    f.respond("extension.getAutomationTarget", () => ({ok: true, url})); await flush();
+    assert.equal(f.elements.automation.disabled, true);
+    assert.equal(f.elements.automation.checked, false);
+  }
+});
+
+test("ordinary HTTP popup preview fails closed without browser or backend requests", async () => {
+  const f = fixture(idlePower("off"), undefined, {noBrowser: true}); await flush();
+  assert.equal(f.elements.previewNotice.hidden, false);
+  assert.equal(f.elements.powerStatus.textContent, "Web preview only");
+  assert.equal(f.elements.recordBtn.disabled, true);
+  assert.equal(f.elements.turnOnBtn.disabled, true);
+  assert.equal(f.elements.monitorBtn.disabled, true);
+  assert.equal(f.elements.refreshStatus.disabled, true);
+  assert.match(f.elements.nextDetail.textContent, /cannot read browser status/);
+  assert.equal(f.calls.length, 0); assert.equal(f.fetches.length, 0);
+});
+
+test("popup document has a stable intrinsic width and ordinary labels cannot break every letter", async () => {
+  const html = await readFile(new URL("../extension/popup/popup.html", import.meta.url), "utf8");
+  const css = await readFile(new URL("../extension/popup/popup.css", import.meta.url), "utf8");
+  const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.match(css, /html\{[^}]*width:400px;min-width:400px;writing-mode:horizontal-tb/);
+  assert.match(css, /body\{[^}]*width:400px;min-width:400px;[^}]*word-break:normal;overflow-wrap:normal/);
+  assert.doesNotMatch(css, /max-width:\s*100vw|word-break:\s*break-all/);
+  assert.match(css, /\.btn\{[^}]*word-break:normal;white-space:normal/);
+  assert.equal((html.match(/<script\b/g) || []).length, 1);
+  assert.ok(html.indexOf('id="turnOffBtn"') < html.indexOf('id="recordBtn"'));
+});
+
+test("terminal delivery leaves the next capture goal and consent visible", async () => {
+  for (const status of ["delivered", "cancelled", "blocked"]) {
+    const f = fixture(automatic(status)); await flush();
+    assert.equal(f.elements.newCaptureBtn.hidden, false, status);
+    assert.equal(f.elements.captureSetup.hidden, true, status);
+    await f.click("newCaptureBtn");
+    assert.equal(f.elements.recordBtn.hidden, false, status);
+    assert.equal(f.elements.captureSetup.hidden, false, status);
+    assert.equal(f.elements.goal.disabled, false, status);
+    assert.equal(f.elements.consent.disabled, false, status);
+    assert.equal(f.elements.draftMetric.textContent, "2", status);
+  }
+});
+
+test("off overview hides inactive setup but preserves retained recovery and independent power controls", async () => {
+  const f = fixture({...recording(), status: "pending", power: powerState("off")}); await flush();
+  assert.equal(f.elements.captureSetup.hidden, true);
+  assert.equal(f.elements.recordBtn.hidden, true);
+  assert.equal(f.elements.retryBtn.hidden, false);
+  assert.equal(f.elements.retryBtn.disabled, true);
+  assert.equal(f.elements.discardBtn.hidden, false);
+  assert.equal(f.elements.turnOnBtn.hidden, false);
+  assert.match(f.elements.metricScope.textContent, /RETAINED/);
+});
+
+test("recording keeps the supplied captured goal visible without using a new draft goal", async () => {
+  const state = recording(false); state.session.goal = "Keep the selected filter after Save.";
+  const f = fixture(state); await flush();
+  f.elements.goal.value = "An unrelated unsent goal";
+  f.poll(); await flush();
+  assert.equal(f.elements.goalContext.hidden, false);
+  assert.equal(f.elements.capturedGoal.textContent, state.session.goal);
+  assert.equal(f.elements.captureSetup.hidden, true);
+  const legacy = recording(false); f.state(legacy); await flush();
+  assert.match(f.elements.capturedGoal.textContent, /worker did not supply/);
+  assert.doesNotMatch(f.elements.capturedGoal.textContent, /unrelated unsent/);
+});
+
+test("saved review stays primary until another capture is explicitly prepared", async () => {
+  const f = fixture({ok:true,enabled:true,status:"ready",power:powerState("on"),result:{id:"saved",eventCount:8,ticketCount:1,goal:"Check the navigation label."},session:null}); await flush();
+  assert.equal(f.elements.recordBtn.hidden, true);
+  assert.equal(f.elements.captureSetup.hidden, true);
+  assert.equal(f.elements.reviewBtn.hidden, false);
+  assert.equal(f.elements.capturedGoal.textContent, "Check the navigation label.");
+  await f.click("newCaptureBtn");
+  assert.equal(f.elements.captureSetup.hidden, false);
+  assert.equal(f.elements.recordBtn.hidden, false);
+  assert.equal(f.elements.goalContext.hidden, true);
+  assert.equal(f.calls.filter(call => call.type === "extension.startRecording").length, 0);
 });
