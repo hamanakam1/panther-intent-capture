@@ -246,6 +246,8 @@ async function refresh() {
     $("dashboardStatus").textContent = readiness.ready ? "Delivery destination status unavailable · choose Refresh to retry"
       : "Requires the updated local service. Saved captures remain available to inspect.";
   }
+  // Refresh only the read-only diagnostic panel; draft inputs may contain edits.
+  if (selected) await renderDiagnostics(selected.id, requestVersion);
 }
 
 /** Show every delivery destination and let one be chosen for manual delivery. */
