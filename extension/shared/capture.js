@@ -58,6 +58,8 @@ export function pantherDiagnosticRelay(nonce) {
 
 /** Persist before acknowledging: a Chromium service worker can stop at any time. */
 export function createCaptureController(api, fetcher, now = Date.now, { isPowered = () => false } = {}) {
+  // Snapshotted by this worker, not inferred from newly hot-served UI assets.
+  const worker = {capture_contract: 2, app_version: api.runtime.getManifest?.().version || "unknown"};
   let queue = Promise.resolve();
   let pollQueued = false;
   let frozen = false;
@@ -124,13 +126,17 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
       await api.action.setBadgeBackgroundColor({ tabId: session.tabId, color: session.status === "recording" ? "#dc2626" : "#b45309" });
     } catch { /* The captured tab may have been closed. */ }
   };
-  const status = async (includeLive = false) => {
+  const status = async (includeLive = false, includeGoal = false) => {
     const session = await read(SESSION_KEY);
     const settings = await read(SETTINGS_KEY) || {};
     const result = await read(RESULT_KEY) || null;
     // The page panel never receives the goal, action feed or live interpretation.
     const publicResult = result ? { ...result } : null;
-    if (publicResult) delete publicResult.live;
+    if (publicResult) {
+      delete publicResult.live;
+      delete publicResult.goal;
+      if (includeGoal) publicResult.goal = sanitizeText(result.live?.goal || "", 1000);
+    }
     return {
       ok: true, enabled: settings.enabled === true,
       status: session?.status || result?.status || "idle",
@@ -138,6 +144,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
         sessionId: session.sessionId, tabId: session.tabId, startTime: session.startTime,
         eventCount: session.events.length, screenshotCount: session.screenshots.length,
         screenshotsConsent: session.screenshotConsent === true,
+        ...(includeGoal ? {goal: sanitizeText(session.goal || "", 1000)} : {}),
         error: session.error || "", warning: session.warning || "", stopReason: session.stopReason || "", url: session.url,
         automation: session.automation || null, automationWithdrawn: session.automationWithdrawn === true,
         powerPaused: session.powerPaused === true,
@@ -145,6 +152,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
         cancelRequested: session.cancelRequested === true, cancellationConfirmed: session.cancellationConfirmed === true
       } : null,
       result: publicResult,
+      ...(includeGoal ? {worker: {...worker}} : {}),
       ...(includeLive ? { live: session ? buildLiveActivity(session) : sanitizeLiveActivity(result?.live) } : {})
     };
   };
@@ -697,7 +705,7 @@ export function createCaptureController(api, fetcher, now = Date.now, { isPowere
     }
     if (!["extension.getStatus", "extension.openReview", "extension.cancelLiveAnalysis"].includes(message.type) && !(message.type === "extension.setEnabled" && message.enabled !== true)) requirePower();
     switch (message.type) {
-      case "extension.getStatus": return status(trustedMonitorControl(api, sender));
+      case "extension.getStatus": return status(trustedMonitorControl(api, sender), true);
       case "extension.analyzeLive": return analyzeLive(message);
       case "extension.cancelLiveAnalysis": return { ok: true, cancelled: typeof message.sessionId === "string" && !!message.sessionId && cancelLiveAnalysis(message.sessionId) };
       case "extension.getAutomationTarget": return { ok: true, destinations: await automationTargets() };

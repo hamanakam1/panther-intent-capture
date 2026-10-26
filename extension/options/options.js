@@ -1,4 +1,4 @@
-import { BACKEND_ORIGIN } from "../shared/constants.js";
+import { BACKEND_ORIGIN, backendReadiness, UPDATE_GUIDANCE } from "../shared/constants.js";
 import { automationView, safeTicketURL } from "./automation-state.js";
 
 const origin = location.protocol === "chrome-extension:" ? BACKEND_ORIGIN : location.origin;
@@ -6,9 +6,17 @@ const browserControlled = location.protocol === "chrome-extension:";
 let browserPowerOn = !browserControlled;
 const $ = id => document.getElementById(id);
 let selected = null;
+let selectedVersion = 0;
+const dirtyDrafts = new Set();
 let recordings = [];
 let activePreview = null;
 let loading = false;
+let exporting = false;
+let deliverySending = false;
+let deletingCapture = null;
+const deletedCaptureIds = new Set();
+let draftRenderVersion = 0;
+let draftEditVersion = 0;
 let requestVersion = 0;
 let automation = null;
 let automationStale = false;
@@ -18,12 +26,49 @@ let deliveryKind = "";
 let automationRequest = 0;
 let automationControlBusy = false;
 const busyButtons = new WeakSet();
+let readiness = backendReadiness(null);
+let healthRequest = 0;
+
+function renderReadiness() {
+  $("backendReadiness").hidden = readiness.ready;
+  $("backendReadiness").textContent = (readiness.connected ? "Local service update required. " : "Review compatibility is unconfirmed. ")
+    + "You can inspect saved captures. Editing, generation, delivery retries and exports are paused. " + UPDATE_GUIDANCE;
+  $("backendStatus").textContent = readiness.ready ? "Local backend " + readiness.version + " · review ready"
+    : readiness.connected ? "Local backend " + readiness.version + " · read-only review" : "Local backend unconfirmed";
+  $("backendDot").classList.toggle("ok", readiness.ready);
+  syncDraftControls();
+}
+async function checkReadiness() {
+  const request = ++healthRequest;
+  readiness = backendReadiness(null); renderReadiness();
+  try {
+    const health = await api("health");
+    if (request !== healthRequest) {
+      const error = new Error("A newer connection check is in progress. Try again after it finishes.");
+      error.stale = true; throw error;
+    }
+    readiness = backendReadiness(health); renderReadiness();
+    return readiness;
+  } catch (error) {
+    if (request === healthRequest) { readiness = backendReadiness(null); renderReadiness(); }
+    throw error;
+  }
+}
+function requiresReviewContract(path, method, body) {
+  return path.startsWith("export/") || /\breplay(?:\?|$)/.test(path)
+    || method === "DELETE"
+    || (method !== "GET" && (path.startsWith("tickets/") || path.startsWith("integrations/")
+      || (path.startsWith("automation/") && body?.action !== "cancel")));
+}
 
 function message(text, error = false) {
   $("message").textContent = text;
   $("message").classList.toggle("error", error);
 }
 async function api(path, body, method = body === undefined ? "GET" : "POST") {
+  if (requiresReviewContract(path, method, body) && !(await checkReadiness()).ready) {
+    throw new Error("This local service cannot confirm safe draft edits and intent bundles. " + UPDATE_GUIDANCE);
+  }
   if (browserControlled) {
     try {
       const state = await chrome.runtime.sendMessage({type: "extension.getPowerState"});
@@ -33,7 +78,7 @@ async function api(path, body, method = body === undefined ? "GET" : "POST") {
     if (!browserPowerOn) throw new Error("Panther is off. Turn Panther on from its browser popup, then refresh this page.");
   }
   const response = await fetch(origin + "/api/extension/" + path, {
-    method, headers: { "Content-Type": "application/json", "X-Panther-Client": "review-v1" },
+    method, cache: "no-store", headers: { "Content-Type": "application/json", "X-Panther-Client": "review-v1" },
     ...(body === undefined ? {} : {body: JSON.stringify(body)}),
     signal: AbortSignal.timeout(path.startsWith("tickets/") ? 125000 : 30000)
   });
@@ -59,9 +104,16 @@ function button(label, action, className = "") {
   return node;
 }
 function syncDraftControls() {
-  const locked = !browserPowerOn || loading || (selected && automationView(automation, automationStale).locked);
+  const deletingCurrent = selected && deletingCapture?.id === selected.id;
+  const locked = !browserPowerOn || !readiness.ready || loading || deletingCurrent || (selected && automationView(automation, automationStale).locked);
   $("generate").disabled = Boolean(locked); $("generateAI").disabled = Boolean(locked);
   for (const node of $("tickets").querySelectorAll("input, textarea, button")) node.disabled = Boolean(locked || busyButtons.has(node));
+  for (const id of ["exportReplay", "exportReplayScript"]) $(id).disabled = !browserPowerOn || !readiness.ready || !selected || Boolean(deletingCurrent);
+  $("deleteCapture").disabled = !browserPowerOn || !readiness.ready || !selected || loading || Boolean(deletingCapture);
+  $("deleteCapture").textContent = deletingCurrent ? "Deleting capture…" : "Delete capture";
+  $("retryAutomation").disabled = automationControlBusy || !readiness.ready;
+  $("confirmSend").disabled = !readiness.ready || !activePreview || deliverySending || Boolean(deletingCurrent);
+  syncUnsaved();
 }
 function renderAutomation() {
   const view = automationView(automation, automationStale);
@@ -164,46 +216,71 @@ async function renderDiagnostics(id, version) {
   } catch (error) {
     if (version !== requestVersion || selected?.id !== id) return;
     $("diagnosticsPanel").hidden = false;
-    $("diagnosticNotice").textContent = "Page-reported failures are unavailable: " + error.message;
+    $("diagnosticNotice").textContent = readiness.ready
+      ? "Page-reported failures are unavailable: " + error.message
+      : "Requires the updated local service. Saved interactions remain available to inspect.";
   }
 }
 async function refresh() {
   try {
-    const health = await api("health");
-    $("backendStatus").textContent = health.status === "ok" ? "Local backend connected" : "Backend needs attention";
-    $("backendDot").classList.toggle("ok", health.status === "ok");
-    recordings = (await api("recordings")).recordings;
+    await checkReadiness();
+  } catch (error) {
+    if (error.stale) return;
+    message(error.message + " — choose Refresh after restoring the local connection.", true);
+  }
+  try {
+    recordings = (await api("recordings")).recordings.filter(capture => !deletedCaptureIds.has(capture.id));
     renderLibrary();
     message(recordings.length ? "Captures are ready to review." : "No captures yet. Open the extension on a web page to start.");
   } catch (error) {
     $("backendStatus").textContent = "Local backend unavailable";
     $("backendDot").classList.remove("ok");
-    message(error.message + " — start backend/start.sh, then refresh.", true);
+    message(error.message + (browserControlled ? " — turn Panther on from its browser toolbar, then choose Refresh." : " — start the local review service or turn Panther on from its browser toolbar, then choose Refresh. This page does not start capture."), true);
   }
   try {
     const catalogue = await api("integrations");
     renderDestinations(catalogue.destinations || []);
-  } catch (_) { $("dashboardStatus").textContent = "Delivery destination status unavailable"; }
+  } catch (_) {
+    const option = element("option", readiness.ready ? "Destination status unavailable" : "Update required");
+    option.value = ""; option.disabled = true;
+    $("deliveryDestination").replaceChildren(option);
+    $("deliveryDestination").value = "";
+    $("deliveryDestination").hidden = false;
+    $("deliveryDestination").disabled = true;
+    deliveryKind = ""; activePreview = null; $("previewDialog").close();
+    $("dashboardStatus").textContent = readiness.ready ? "Delivery destination status unavailable · choose Refresh to retry"
+      : "Requires the updated local service. Saved captures remain available to inspect.";
+  }
+  // Refresh only the read-only diagnostic panel; draft inputs may contain edits.
+  if (selected) await renderDiagnostics(selected.id, requestVersion);
 }
 
 /** Show every delivery destination and let one be chosen for manual delivery. */
 function renderDestinations(list) {
   const previous = $("deliveryDestination").value;
-  $("deliveryDestination").replaceChildren(...list.map((destination) => {
+  const usable = list.filter(destination => destination.configured);
+  const chosen = usable.find(destination => destination.kind === previous) || usable[0];
+  const options = list.map(destination => {
     const option = document.createElement("option");
     option.value = destination.kind;
     option.textContent = destination.available ? destination.label
       : destination.configured ? `${destination.label} (not reachable right now)` : `${destination.label} (not configured)`;
     option.disabled = !destination.configured;
     return option;
-  }));
-  const usable = list.filter((destination) => destination.configured);
-  const chosen = usable.find((destination) => destination.kind === previous) || usable[0];
+  });
+  if (!chosen) {
+    const placeholder = document.createElement("option");
+    placeholder.value = ""; placeholder.textContent = readiness.ready ? "No destination configured" : "Update required"; placeholder.disabled = true;
+    options.unshift(placeholder);
+  }
+  $("deliveryDestination").replaceChildren(...options);
   $("deliveryDestination").value = chosen ? chosen.kind : "";
-  $("deliveryDestination").hidden = list.length < 2;
+  $("deliveryDestination").hidden = readiness.ready && list.length < 2;
+  $("deliveryDestination").disabled = !chosen || !readiness.ready;
   deliveryKind = chosen ? chosen.kind : "";
-  const selected = list.find((destination) => destination.kind === deliveryKind);
-  $("dashboardStatus").textContent = !selected ? "Delivery destination not configured · capture and JSON export still work"
+  const selected = list.find(destination => destination.kind === deliveryKind);
+  $("dashboardStatus").textContent = !readiness.ready ? "Delivery is paused until the local service update is confirmed."
+    : !selected ? "Delivery destination not configured · capture and JSON export still work"
     : selected.available ? `${selected.label} reachable · delivery verified when sent`
       : selected.configured ? `${selected.label} configured but not reachable · JSON export still works`
         : `${selected.label} is not configured · capture and JSON export still work`;
@@ -211,20 +288,33 @@ function renderDestinations(list) {
 function renderLibrary() {
   $("count").textContent = recordings.length;
   $("recordings").replaceChildren();
-  for (const capture of recordings) {
+  const query = $("captureSearch").value.trim().toLocaleLowerCase();
+  const matching = recordings.filter(capture => !query || [capture.title, capture.url, capture.goal].some(value => typeof value === "string" && value.toLocaleLowerCase().includes(query)));
+  $("libraryEmpty").hidden = matching.length > 0;
+  $("libraryEmpty").textContent = recordings.length ? "No captures match this search. Try a page name or another word." : "No captures yet. Start from Panther’s toolbar on your chosen webpage.";
+  for (const capture of matching) {
     const node = button(capture.title || capture.url || "Browser capture", () => openCapture(capture.id), "capture-choice");
+    node.disabled = deletingCapture?.id === capture.id;
     node.setAttribute("aria-current", String(selected?.id === capture.id));
     node.append(element("small", new Date(capture.start_time * 1000).toLocaleString() + " · " + capture.event_count + " events"));
+    if (node.disabled) node.append(element("small", "Deletion in progress…"));
     $("recordings").append(node);
   }
 }
 async function openCapture(id) {
   if (loading) return;
+  if (deletingCapture?.id === id || deletedCaptureIds.has(id)) {
+    message("That capture is being deleted or has already been deleted. Your current review stays open."); return;
+  }
+  if (dirtyDrafts.size && !confirm("Leave this capture and discard unsaved draft edits? Saved evidence will remain.")) return;
   const version = ++requestVersion;
+  activePreview = null; $("previewDialog").close();
   clearTimeout(automationTimer);
   const [capture, evidence] = await Promise.all([api("recordings/" + id), api("recordings/" + id + "/events")]);
-  if (version !== requestVersion) return;
+  if (version !== requestVersion || deletedCaptureIds.has(id)) return;
   selected = capture;
+  selectedVersion = version;
+  dirtyDrafts.clear(); syncUnsaved();
   automation = null; automationStale = false; renderedDraftCount = 0;
   $("tickets").replaceChildren(); renderAutomation();
   $("emptyReview").hidden = true; $("captureView").hidden = false;
@@ -280,6 +370,7 @@ async function openCapture(id) {
 }
 async function generate(useAI) {
   if (!selected || loading || automationView(automation, automationStale).locked) return;
+  if (dirtyDrafts.size && !confirm("Generate new drafts and replace unsaved edits? Your captured evidence will remain.")) return;
   loading = true;
   syncDraftControls();
   $("generationStatus").textContent = useAI ? "Generating drafts with local AI… This can take up to two minutes." : "Preparing an evidence draft from captured interactions…";
@@ -293,7 +384,14 @@ async function generate(useAI) {
     message(error.message, true);
   } finally { loading = false; syncDraftControls(); }
 }
+function syncUnsaved() {
+  $("unsavedNotice").hidden = dirtyDrafts.size === 0;
+  for (const id of ["export", "exportCompanion", "copyCompanion"]) $(id).disabled = dirtyDrafts.size > 0 || exporting || loading || !selected || !browserPowerOn || !readiness.ready || Boolean(selected && deletingCapture?.id === selected.id);
+}
 function renderTickets(data, recordingId = selected.id) {
+  const renderVersion = ++draftRenderVersion, viewVersion = requestVersion;
+  ++draftEditVersion;
+  dirtyDrafts.clear(); syncUnsaved();
   renderedDraftCount = data.tickets.length;
   $("tickets").replaceChildren();
   $("generationStatus").textContent = data.tickets.length + " draft(s) · " +
@@ -302,12 +400,14 @@ function renderTickets(data, recordingId = selected.id) {
     const card = element("article", "", "ticket");
     card.append(element("span", data.mode === "ai" ? "AI PROPOSAL · UNVERIFIED" : "EVIDENCE DRAFT · REVIEW REQUIRED", "badge"));
     const fields = {};
+    let editRevision = 0;
     for (const [key, label, multiline] of [["title", "Ticket title", false], ["description", "Problem or improvement", true], ["acceptance_criteria", "Expected result / acceptance criteria (one per line)", true]]) {
       const id = "draft-" + ticket.id + "-" + key;
       const fieldLabel = element("label", label); fieldLabel.htmlFor = id;
       const input = document.createElement(multiline ? "textarea" : "input");
       input.id = id; input.maxLength = key === "title" ? 200 : key === "description" ? 2000 : 5000;
       input.value = key === "acceptance_criteria" ? (ticket[key] || []).join("\n") : ticket[key] || "";
+      input.addEventListener("input", () => { ++editRevision; ++draftEditVersion; dirtyDrafts.add(ticket.id); syncUnsaved(); });
       fields[key] = input; card.append(fieldLabel, input);
     }
     card.append(element("pre", "Observed steps:\n" + (ticket.steps_to_reproduce || []).map((s,i) => (i + 1) + ". " + s).join("\n")));
@@ -323,14 +423,22 @@ function renderTickets(data, recordingId = selected.id) {
     const actions = element("div", "", "actions");
     const patch = () => ({title: fields.title.value.trim(), description: fields.description.value.trim(), acceptance_criteria: fields.acceptance_criteria.value.split("\n").map(x => x.trim()).filter(Boolean)});
     actions.append(button("Save draft edits", async () => {
+      const savingRevision = editRevision;
       await api("tickets/" + recordingId + "/review", {ticket_id: ticket.id, patch: patch()});
-      message("Draft edits saved locally.");
+      if (selected?.id !== recordingId || viewVersion !== requestVersion || renderVersion !== draftRenderVersion) return;
+      if (editRevision === savingRevision) { dirtyDrafts.delete(ticket.id); syncUnsaved(); }
+      message(editRevision === savingRevision ? "Draft edits saved locally." : "Earlier edits were saved; save your newer wording before exporting.");
     }));
     actions.append(button("Preview ticket delivery", async () => {
       const body = {ticket_id: ticket.id, patch: patch()};
+      const version = requestVersion, savingRevision = editRevision, kind = deliveryKind;
       await api("tickets/" + recordingId + "/review", body);
-      const preview = await api("integrations/" + encodeURIComponent(deliveryKind) + "/preview/" + recordingId, body);
-      activePreview = {id: recordingId, body, preview};
+      if (selected?.id !== recordingId || version !== requestVersion || renderVersion !== draftRenderVersion) return;
+      if (editRevision === savingRevision) { dirtyDrafts.delete(ticket.id); syncUnsaved(); }
+      const preview = await api("integrations/" + encodeURIComponent(kind) + "/preview/" + recordingId, body);
+      if (selected?.id !== recordingId || version !== requestVersion || renderVersion !== draftRenderVersion || kind !== deliveryKind) return;
+      if (editRevision !== savingRevision) { message("The draft changed while its preview was being prepared. Save your latest edits and preview again.", true); return; }
+      activePreview = {id: recordingId, body, preview, kind};
       const summary = $("previewSummary");
       summary.replaceChildren(element("h3", preview.payload.title), element("p", body.patch.description));
       summary.append(element("h3", "Expected result"));
@@ -354,6 +462,7 @@ function renderTickets(data, recordingId = selected.id) {
   syncDraftControls();
 }
 $("refresh").addEventListener("click", refresh);
+$("captureSearch").addEventListener("input", renderLibrary);
 $("generate").addEventListener("click", () => generate(false));
 $("generateAI").addEventListener("click", () => generate(true));
 $("retryAutomation").addEventListener("click", () => controlAutomation("retry"));
@@ -362,15 +471,23 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") { ++automationRequest; clearTimeout(automationTimer); }
   else if (selected) pollAutomation();
 });
-$("cancelSend").addEventListener("click", () => $("previewDialog").close());
+$("cancelSend").addEventListener("click", () => { activePreview = null; $("previewDialog").close(); });
+$("previewDialog").addEventListener("close", () => { activePreview = null; });
+$("deliveryDestination").addEventListener("change", () => {
+  deliveryKind = $("deliveryDestination").value;
+  activePreview = null; $("previewDialog").close();
+});
 $("confirmSend").addEventListener("click", async () => {
   if (!activePreview) return;
+  deliverySending = true;
   $("confirmSend").disabled = true;
   $("deliveryStatus").classList.remove("error");
   $("deliveryStatus").textContent = "Sending and verifying the dashboard ticket…";
+  const pendingPreview = activePreview;
   try {
-    const {id, body, preview} = activePreview;
-    const result = await api("integrations/" + encodeURIComponent(deliveryKind) + "/submit/" + id, {...body, confirmed: true, payload_hash: preview.payload_hash});
+    const {id, body, preview, kind} = pendingPreview;
+    const result = await api("integrations/" + encodeURIComponent(kind) + "/submit/" + id, {...body, confirmed: true, payload_hash: preview.payload_hash});
+    if (activePreview !== pendingPreview) return;
     if (result.verified) {
       const verifiedAt = result.receipt?.verified_at;
       const when = Number.isFinite(verifiedAt) ? new Date(verifiedAt * 1000).toLocaleString() : "the recorded delivery time";
@@ -384,17 +501,35 @@ $("confirmSend").addEventListener("click", async () => {
       const link = element("a", " Open ticket"); link.href = result.ticket_url; link.target = "_blank"; link.rel = "noopener"; $("deliveryStatus").append(link);
     }
   } catch (error) {
+    if (activePreview !== pendingPreview) return;
     $("deliveryStatus").textContent = error.message + " — Retry preserves the same ticket identity.";
     $("deliveryStatus").classList.add("error");
-  } finally { $("confirmSend").disabled = false; }
+  } finally { deliverySending = false; if (activePreview === pendingPreview) $("confirmSend").disabled = !readiness.ready; }
 });
 $("deleteCapture").addEventListener("click", async () => {
-  if (!selected || !confirm("Delete this capture and its local evidence? Tickets already sent to other systems remain there.")) return;
+  if (!selected || deletingCapture || !confirm("Delete this capture and its local evidence? Tickets already sent to other systems remain there.")) return;
+  const target = {id: selected.id, title: selected.title || "this capture"};
+  deletingCapture = target; syncDraftControls(); renderLibrary();
   try {
-    await api("recordings/" + selected.id, undefined, "DELETE");
-    ++requestVersion; clearTimeout(automationTimer); selected = null; automation = null;
-    $("captureView").hidden = true; $("emptyReview").hidden = false; await refresh();
-  } catch (error) { message(error.message, true); }
+    await api("recordings/" + target.id, undefined, "DELETE");
+    deletedCaptureIds.add(target.id);
+    recordings = recordings.filter(capture => capture.id !== target.id); renderLibrary();
+    if (selected?.id === target.id) {
+      // Invalidate work for this view, but not a newer selection still loading.
+      if (requestVersion === selectedVersion) ++requestVersion;
+      clearTimeout(automationTimer); selected = null; automation = null; activePreview = null;
+      dirtyDrafts.clear(); $("previewDialog").close();
+      $("captureView").hidden = true; $("emptyReview").hidden = false;
+    }
+    // A different capture may now be open or loading. Its view generation,
+    // fields and dirty state belong to that review, not this completed delete.
+    await refresh();
+    message(`Deleted “${target.title}”. Tickets already sent to other systems remain there.`);
+  } catch (error) {
+    message(`Could not confirm deletion of “${target.title}”: ${error.message} Your current draft edits are still here. Choose Refresh to check saved captures before retrying.`, true);
+  } finally {
+    deletingCapture = null; syncDraftControls(); renderLibrary();
+  }
 });
 function download(name, content, type) {
   const blob = new Blob([content], {type});
@@ -417,16 +552,41 @@ $("exportReplayScript").addEventListener("click", async () => {
     message("Replay script exported. It is a proposal to review; Panther never runs it.");
   } catch (error) { message(error.message, true); }
 });
-$("export").addEventListener("click", async () => {
+async function exportBundle(forCompanion = false, copy = false) {
   if (!selected) return;
+  if (dirtyDrafts.size) { message("Save draft edits before exporting so the bundle contains your reviewed wording.", true); return; }
+  const id = selected.id, version = requestVersion, editVersion = draftEditVersion;
+  if (exporting) return;
+  exporting = true; syncUnsaved();
   try {
-    const bundle = await api("export/" + selected.id);
-    const blob = new Blob([JSON.stringify(bundle, null, 2)], {type: "application/json"});
-    const url = URL.createObjectURL(blob); const link = document.createElement("a");
-    link.href = url; link.download = "panther-" + selected.id + ".json"; link.click(); URL.revokeObjectURL(url);
-    message("Draft bundle exported. Save any draft edits before exporting.");
-  } catch (error) { message(error.message, true); }
-});
+    const bundle = await api("export/" + id);
+    if (bundle?.schema_version !== "1.2" || bundle.authority?.execution_authorized !== false || bundle.authority?.requires_review !== true || bundle.authority?.export_only !== true) throw new Error("The service returned an incompatible intent bundle. Nothing was copied or downloaded. " + UPDATE_GUIDANCE);
+    if (version !== requestVersion || selected?.id !== id) return;
+    if (dirtyDrafts.size || editVersion !== draftEditVersion) { message("The draft changed while the export was being prepared. Save your latest edits and export again.", true); return; }
+    const serialized = JSON.stringify(bundle, null, 2);
+    if (copy) {
+      try {
+        if (typeof navigator === "undefined" || typeof navigator.clipboard?.writeText !== "function") throw new Error("Clipboard unavailable");
+        await navigator.clipboard.writeText(serialized);
+      } catch {
+        message("Could not copy to the clipboard. Choose Download intent bundle, then select that JSON file in Companion’s Import from Intent Capture dialog.", true);
+        return;
+      }
+      if (version !== requestVersion || selected?.id !== id || dirtyDrafts.size || editVersion !== draftEditVersion) {
+        message("A saved version was copied, but the draft or selected capture changed. Save your latest edits and copy again before importing.", true);
+        return;
+      }
+      message("Intent bundle copied. In Companion, choose Import from Intent Capture → Paste bundle JSON → Preview bundle. No data was sent automatically.");
+    } else {
+      download("panther-" + id + ".json", serialized, "application/json");
+      message(forCompanion ? "Bundle exported. In Companion, choose Import from Intent Capture → Choose JSON file, then preview it before importing. No data was sent automatically." : "Draft bundle exported with saved wording. Export does not authorize execution or delivery.");
+    }
+  } catch (error) { if (version === requestVersion) message(error.message, true); }
+  finally { exporting = false; syncUnsaved(); }
+}
+$("export").addEventListener("click", () => exportBundle());
+$("exportCompanion").addEventListener("click", () => exportBundle(true));
+$("copyCompanion").addEventListener("click", () => exportBundle(true, true));
 await refresh();
 const initial = new URL(location.href).searchParams.get("recording");
 if (initial && recordings.some(r => r.id === initial)) await openCapture(initial);

@@ -1,60 +1,42 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Panther Intent Capture</title>
-<link rel="stylesheet" href="popup.css">
-</head>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Panther · Capture dashboard</title><link rel="stylesheet" href="popup.css"></head>
 <body>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark" aria-hidden="true">P</span><div><h1>Panther</h1><p>INTENT CAPTURE</p></div></div>
+  <div class="power-controls"><strong id="powerStatus" role="status" aria-live="polite">Checking Panther…</strong><div><button id="turnOnBtn" class="compact primary" disabled>Turn on</button><button id="turnOffBtn" class="compact danger" hidden>Turn off</button></div></div>
+</header>
 <main class="shell">
-  <header class="header"><h1>Panther</h1><div class="status" id="status" role="status">Checking…</div></header>
-  <section class="card power-card" aria-label="Panther runtime">
-    <div class="power-heading"><strong id="powerStatus" role="status" aria-live="polite">Panther is off</strong></div>
-    <div class="power-actions">
-      <button id="turnOnBtn" class="btn power-on">Turn Panther on</button>
-      <button id="turnOffBtn" class="btn danger" hidden>Turn Panther off</button>
+  <p id="previewNotice" class="notice" hidden>This is a preview of the toolbar dashboard. Open Panther from your browser toolbar to capture a page.</p>
+  <p id="workerReadiness" class="notice" role="status" hidden></p>
+  <section class="card next-card" aria-label="Capture dashboard">
+    <div class="section-heading"><p class="eyebrow">YOUR NEXT STEP</p><span id="status" class="status" role="status">Checking…</span></div>
+    <h2 id="nextTitle">Checking your capture status</h2><p id="nextDetail" class="note">No capture starts when you open this dashboard.</p>
+    <div class="page-context"><span id="pageLabel" class="eyebrow">SELECTED PAGE</span><strong id="pageTitle">Checking the selected tab…</strong><span id="pageDetail" class="note"></span></div>
+    <div id="goalContext" class="goal-context" hidden><p class="eyebrow">CAPTURED GOAL</p><p id="capturedGoal"></p></div>
+    <div id="captureSetup" class="capture-setup">
+      <label for="goal" class="field-label">What outcome do you want?</label><textarea id="goal" rows="2" maxlength="1000" placeholder="For example: keep my selected filter after Save"></textarea>
+      <label class="consent-row"><input type="checkbox" id="consent"><span>Allow capture of this chosen page</span></label>
+      <p id="consentHelp" class="privacy-note">Clicks, navigation and control labels. No typed values or keystrokes.</p>
     </div>
-    <p id="powerHelp" class="note">Turning on starts the local backend, not capture. Nothing starts at login.</p>
-    <p id="powerError" class="error" role="alert" hidden></p>
-    <button id="monitorBtn" class="btn monitor-open">Open status window</button>
-    <p class="note">A separate window shows live activity and Off controls. Closing it hides the view; it does not stop Panther.</p>
-    <p id="monitorError" class="error" role="alert" hidden></p>
-    <div id="setupNeeded" class="setup-needed" hidden><strong>One-time browser helper setup needed</strong><p class="note">Register the local helper for this browser and extension ID. Setup does not install a login service.</p></div>
-    <details class="helper-setup"><summary>Browser helper setup</summary><p class="note">Extension ID: <code id="extensionId"></code></p><a id="setupLink" href="https://github.com/hamanakam1/panther-intent-capture/blob/main/docs/BROWSER_CONTROL.md" target="_blank" rel="noopener noreferrer">Setup instructions</a></details>
+    <div class="session-actions"><button id="reviewBtn" class="btn primary" hidden>Review saved drafts</button><button id="newCaptureBtn" class="btn" hidden>Prepare another capture</button><button id="recordBtn" class="btn primary" disabled>Start capture</button><button id="stopBtn" class="btn primary" hidden>Stop &amp; create drafts</button><button id="retryBtn" class="btn primary" hidden>Retry upload</button><button id="generateBtn" class="btn primary" hidden>Retry draft generation</button><button id="refreshAutomationBtn" class="btn" hidden>Check delivery status</button><button id="retryAutomationBtn" class="btn" hidden>Retry delivery</button><button id="cancelAutomationBtn" class="btn danger-outline" hidden>Cancel remaining delivery</button><button id="discardBtn" class="btn danger-outline" hidden>Discard unsaved capture</button></div>
+    <p id="capturePowerHelp" class="privacy-note">Stop saves or delivers this session and leaves Panther on.</p>
+    <div id="warning" class="notice" role="status" hidden></div><div id="error" class="error" role="alert" hidden></div>
+    <p id="metricScope" class="eyebrow metrics-label">THIS SESSION</p><dl class="metrics"><div><dt>Events</dt><dd id="eventMetric">—</dd></div><div><dt>Screenshots</dt><dd id="screenshotMetric">—</dd></div><div><dt>Drafts</dt><dd id="draftMetric">—</dd></div></dl>
+    <p id="sessionNote" class="privacy-note">No session yet.</p>
+    <details id="sessionDetails" class="subtle-details"><summary>Session details</summary><p class="meta" id="meta" aria-live="polite"></p></details>
   </section>
-  <div id="backendBanner" class="banner warn" hidden>Local backend is unavailable. Capture stays in this browser until upload succeeds.</div>
-  <section class="card control-card">
-    <button id="recordBtn" class="btn" disabled>Start capture</button>
-    <button id="stopBtn" class="btn danger" hidden>Stop &amp; generate drafts</button>
-    <button id="retryBtn" class="btn" hidden>Retry upload</button>
-    <button id="generateBtn" class="btn" hidden>Retry draft generation</button>
-    <button id="refreshAutomationBtn" class="btn" hidden>Check delivery status</button>
-    <button id="retryAutomationBtn" class="btn" hidden>Retry delivery</button>
-    <button id="cancelAutomationBtn" class="btn danger" hidden>Cancel automatic delivery</button>
-    <button id="reviewBtn" class="btn" hidden>Review drafts</button>
-    <button id="discardBtn" class="btn" hidden>Discard unsaved capture</button>
-    <div class="meta" id="meta" aria-live="polite"></div>
-    <p id="capturePowerHelp" class="note">Stop saves or delivers this session and leaves Panther on. Turn Panther off stops capture, cancels remaining automatic delivery, and preserves unsaved events.</p>
-    <div id="warning" class="banner warn" role="status" hidden></div>
-    <div id="error" class="error" role="alert" hidden></div>
+  <details id="captureOptions" class="card settings-card"><summary><span>Capture options</span><span id="optionSummary" class="summary-detail">Screenshots off · Delivery off</span></summary>
+    <label class="consent-row"><input type="checkbox" id="screenshots"><span>Include up to 5 screenshots</span></label><p class="note">For this session only. Images may contain private information; pixels are not redacted. Audio and video are unavailable.</p>
+    <div class="setting-divider"></div><label class="consent-row"><input type="checkbox" id="automation"><span>Deliver draft tickets automatically</span></label><p class="note">Optional for this session. Otherwise, stop and review drafts before sharing.</p>
+    <label for="automationDestination" class="field-label">Delivery destination</label><select id="automationDestination"></select><p id="automationTarget" class="note">Turn Panther on to check destinations.</p>
+    <label class="consent-row"><input type="checkbox" id="automationAI" disabled><span>Use local AI to propose tickets</span></label><p class="note">Creates up to 5 review-only backlog tickets at the displayed destination. No screenshot pixels or work execution. Consent expires 24 hours after Start. Cancelling cannot undo delivered or in-flight requests.</p>
+  </details>
+  <section class="card recent-card" aria-label="Recent saved captures"><div class="section-heading"><h2>Recent captures</h2><a href="../options/options.html" target="_blank" rel="noopener">View all ↗</a></div><p id="recentStatus" class="note" role="status">Turn on to load saved captures.</p><div id="recentCaptures"></div><p class="privacy-note">Review a capture, then download its intent bundle for Companion.</p></section>
+  <section class="card tools-card" aria-label="Connection and tools"><div class="section-heading"><strong id="helperHealth">Checking the browser helper…</strong><button id="refreshStatus" class="text-button">Refresh</button></div><p id="powerHelp" class="note">Opening this popup does not turn Panther on.</p><p id="backendBanner" class="notice" hidden>Could not reach the local service. Unsaved capture stays in this browser. Check the connection, then retry upload.</p><p id="powerError" class="error" role="alert" hidden></p><p id="monitorError" class="error" role="alert" hidden></p><div id="setupNeeded" class="notice" hidden><strong>Connect the browser helper</strong><p class="note">Complete the one-time setup for this browser, then try Turn on again.</p><a href="https://github.com/hamanakam1/panther-intent-capture/blob/main/docs/BROWSER_CONTROL.md" target="_blank" rel="noopener noreferrer">Open setup instructions ↗</a></div>
+    <div class="tool-links"><button id="monitorBtn" class="btn">Open status window</button><a class="btn" href="http://127.0.0.1:8765" target="_blank" rel="noopener noreferrer">Open Companion ↗</a></div><p class="privacy-note">Companion must be running. Opening it shares no evidence.</p>
+    <details class="subtle-details"><summary>Setup &amp; consent history</summary><p id="loadedVersions" class="note"></p><p class="note">Turning Panther off stops capture, cancels remaining automatic delivery, and preserves unsaved events. Closing this popup or the status window does not turn Panther off.</p><p class="note">Extension ID: <code id="extensionId"></code></p><a id="setupLink" href="https://github.com/hamanakam1/panther-intent-capture/blob/main/docs/BROWSER_CONTROL.md" target="_blank" rel="noopener noreferrer">Browser helper setup</a><div id="log"></div></details>
   </section>
-  <section class="card consent-card">
-    <div class="consent-row"><input type="checkbox" id="consent"><label for="consent">Allow capture of the tab I choose</label></div>
-    <p class="note">While Panther is on, separately consent and Start to capture clicks, navigation, and control metadata. Typed values and keys are excluded. Turning on never starts capture.</p>
-    <label for="goal" class="field-label">What should improve?</label>
-    <textarea id="goal" rows="3" maxlength="1000" placeholder="For example: make the dashboard filter remember my choice"></textarea>
-    <div class="consent-row"><input type="checkbox" id="screenshots"><label for="screenshots">Include up to 5 screenshots this session</label></div>
-    <p class="note">Screenshots may contain private information; pixels are not redacted. Video and audio are unavailable in this release.</p>
-    <div class="consent-row"><input type="checkbox" id="automation"><label for="automation">Automatically deliver tickets this session</label></div>
-    <div class="consent-row"><label for="automationDestination">Destination</label><select id="automationDestination"></select></div>
-    <p id="automationTarget" class="note">Checking the configured delivery destination…</p>
-    <div class="consent-row"><input type="checkbox" id="automationAI" disabled><label for="automationAI">Use local AI to propose tickets this session</label></div>
-    <p class="note">Stop &amp; deliver creates up to 5 review-only backlog tickets at the displayed destination. Summaries, not screenshot pixels, are delivered. Panther does not execute the work. Local AI is optional; otherwise tickets use observed events only. Consent expires 24 hours after Start. Already delivered or in-flight tickets cannot be undone by cancellation.</p>
-  </section>
-  <section class="card log-card"><h3>Activity &amp; consent</h3><div id="log"></div></section>
-  <footer class="footer"><a href="../options/options.html" target="_blank">All recordings &amp; drafts</a> · Chrome / Edge 116+</footer>
-</main>
-<script type="module" src="popup.js"></script>
-</body>
-</html>
+  <footer>On your device · Suggestions require review</footer>
+</main><script type="module" src="popup.js"></script>
+</body></html>

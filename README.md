@@ -50,6 +50,7 @@ The three API calls behind it — the health check, the capture, and the listing
 
 ## What works in this version
 
+- **Toolbar dashboard:** a stable 400-pixel popup keeps power, capture state, the chosen page, captured goal, counts, and the next action together. Recent captures lead to review; capture options and helper details expand when needed. Off remains visible while scrolling. Opening the popup never starts capture or turns on its backend. Older workers that do not provide a goal are identified explicitly.
 - **Chosen-tab capture:** start from the extension popup; record clicks, changes, submissions, and navigation within that tab's origin. Capture starts off. Typed values, typed keys, and full page text are excluded.
 - **Persistent status window:** explicit On opens a small separate browser window showing runtime state, capture counts, generation and delivery progress, and when status was last confirmed. Off stays reachable while work is running. **Open status window** in the popup reopens or focuses it without turning Panther on. Closing it hides the view; it does not stop Panther. It is a normal window, not an always-on-top overlay.
 - **Live activity understanding:** while capturing, the window shows recent actions, a rules-based interpretation, and possible friction tied to numbered evidence. Optional **Live local AI insights** can interpret new observations using your configured local model, with separate opt-in, bounded refreshes, and visible uncertainty. Observations, hypotheses, and saved tickets remain distinct; insights never send tickets or execute work. See [live activity behavior and limits](docs/LIVE_ACTIVITY.md).
@@ -68,6 +69,10 @@ The three API calls behind it — the health check, the capture, and the listing
 
 Video capture, audio capture, and media playback are disabled in this release. Legacy media files in the repository are not a supported capture path. Firefox and Safari manifests are experimental placeholders, not supported browser builds.
 
+## Working beside Panther Companion
+
+Use the status window as a readable capture rail, then use the searchable review desk to check events and page-reported failures, edit expected outcomes, and export a portable intent bundle. **Copy intent bundle** and **Download intent bundle** prepare the existing schema `1.2` content for explicit preview and import in Companion; neither sends it automatically. Both tools remain useful on their own. See [the Companion workspace guide](docs/COMPANION_WORKSPACE.md) for the capture → review → next-action workflow and a practical ultrawide layout.
+
 ## Quick start
 
 You need Python 3.11+, macOS or Linux, and Chrome or Edge 116+ for browser-controlled operation. The core backend uses Python's standard library; no package installation or Ollama service is needed for evidence drafts. There is no login service to enable and no terminal to keep running after helper setup.
@@ -77,12 +82,12 @@ Load the extension:
 1. Open `edge://extensions/` or `chrome://extensions/`.
 2. Enable **Developer mode**, choose **Load unpacked**, and select this repository's `extension/` directory.
 3. Copy Panther's extension ID and perform the one-time [browser helper setup](docs/BROWSER_CONTROL.md). Pin Panther in the browser toolbar. The default `extension/manifest.json` works for both supported browsers; no manifest swapping is needed.
-4. Open an ordinary website you have permission to capture. Open Panther and click **Turn Panther on**. A separate status window opens and shows **On / Idle** after native startup is confirmed. This starts its backend, not capture; it does not start a destination service or Ollama. The window stays available while you switch tabs.
-5. Return to the chosen webpage and open Panther's toolbar popup, enable capture consent, and write a short goal in **What should improve?** Keep screenshots off unless you want to retain visible page pixels. The status window cannot start capture or grant consent.
-6. For an automated session, configure a compatible destination, enable **Automatically deliver tickets this session**, and check the displayed destination. Optionally enable local AI; otherwise evidence-only generation needs no model. These choices apply only to this session.
+4. Open an ordinary website you have permission to capture. Open Panther and click **Turn on**. A separate status window opens and shows **On / Idle** after native startup is confirmed. This starts its backend, not capture; it does not start a destination service or Ollama. The window stays available while you switch tabs.
+5. Return to the chosen webpage and open Panther's toolbar popup, enable capture consent, and write a short goal in **What outcome do you want?** Keep screenshots off unless you want to retain visible page pixels. The status window cannot start capture or grant consent.
+6. For an automated session, configure a compatible destination, open **Capture options**, enable **Deliver draft tickets automatically**, and check the displayed destination. Optionally enable local AI; otherwise evidence-only generation needs no model. These choices apply only to this session.
 7. Click **Start capture**, reproduce the workflow, then stop using the popup, floating panel, or status window. With automation enabled, saving, generation, delivery, and independent verification run automatically; watch the status window's activity, counts, and freshness timestamp. Delivery counts describe the last verified receipts, not continuous destination health. You can cancel remaining delivery, but not undo tickets already submitted.
-8. With automation off, click **Review drafts**, check the observed steps, describe the problem or improvement, and add a verifiable expected result. Choose **Save draft edits** before exporting JSON, or **Preview ticket delivery**, then **Send this reviewed ticket** for manual delivery to your configured destination.
-9. When finished, click **Turn Panther off** in the status window or toolbar popup. The window stays open to show confirmed shutdown. This preserves saved evidence and interrupted local captures, cancels remaining automatic delivery, and stops the browser-owned backend. Already sent tickets and in-flight requests cannot be undone. Quitting the browser process also stops the helper; closing only a window may leave the browser running in background. The next On requires a fresh capture start.
+8. With automation off, click **Review saved drafts**, check the observed steps, describe the problem or improvement, and add a verifiable expected result. Choose **Save draft edits** before exporting JSON, or **Preview ticket delivery**, then **Send this reviewed ticket** for manual delivery to your configured destination.
+9. When finished, click **Turn off** in the toolbar popup or **Turn Panther off** in the status window. The window stays open to show confirmed shutdown. This preserves saved evidence and interrupted local captures, cancels remaining automatic delivery, and stops the browser-owned backend. Already sent tickets and in-flight requests cannot be undone. Quitting the browser process also stops the helper; closing only a window may leave the browser running in background. The next On requires a fresh capture start.
 
 Capture stops when you leave the chosen origin, close the tab, revoke capture consent, or reach the event limit. Same-origin reloads and SPA navigation are supported. A browser restart leaves an interrupted capture available for recovery rather than resuming recording automatically.
 
@@ -100,7 +105,13 @@ Submitted tickets contain a bounded summary of intent, observed evidence, reprod
 
 For another system, use **Export JSON** and map the versioned intent bundle into that system's own draft or issue format. The capture and review workflow is independent of the destination. See [integration contracts and adapter guidance](docs/INTEGRATIONS.md) for the export shape, HTTP routes, retry behavior, and configuration.
 
-Use the [formal intent-bundle JSON Schema](schemas/intent-bundle.schema.json) to validate an importer against the supported version 1.0 contract. Schema validation does not verify a proposed bug or authorize execution.
+Use the [formal intent-bundle JSON Schema](schemas/intent-bundle.schema.json) to validate an importer against the supported version 1.2 contract. Schema validation does not verify a proposed bug or authorize execution.
+
+### Updating the installed source
+
+Source files, the loaded browser worker and the running local backend can have different versions. The toolbar reports them separately. New capture starts require the updated worker's status contract; the review desk stays read-only until the running backend confirms saved-edit persistence and intent bundle 1.2 support. A manual HTTP review workspace only needs a compatible backend. Status checks do not restart services, reload the extension or grant capture consent.
+
+Finish capture → Off → reload extension → On, then Refresh. Retry any retained upload before starting another capture. Review existing automatic-delivery receipts separately: an older session's frozen proposal may require fresh review or consent after an update. No update automatically resumes delivery or authorizes execution.
 
 ## Local AI and configuration
 

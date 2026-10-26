@@ -126,3 +126,16 @@ export function liveView(snapshot = {}, state = {}, now = Date.now()) {
   };
 }
 
+
+// A bounded navigation hint, never an instruction to execute a proposal.
+export function nextStepView(state = {}) {
+  if (!state.fresh || state.power === "unknown" || state.power === "error") return {stage: "", title: "Confirm Panther’s connection", detail: "The last known state may be out of date. Check the runtime message below; Off remains available."};
+  if (state.power === "starting" || state.power === "stopping") return {stage: "", title: "Wait for the power change", detail: "Capture and delivery resume only after an explicit action and a confirmed state."};
+  if (!state.on) return {stage: "capture", title: "Start with one clear intention", detail: "Turn Panther on, open your chosen webpage, then use the toolbar popup to describe the outcome you want and consent to capture."};
+  if (state.historical) return {stage: "review", title: "Pick up the retained capture", detail: "Previous work is saved, not running. Open the toolbar popup to review or recover it before starting again."};
+  if (state.activity === "Capturing") return {stage: "capture", title: "Show the workflow you want to improve", detail: "Use your chosen tab. When the useful evidence is captured, Stop saves it and prepares reviewable drafts."};
+  if (["Saving", "Generating", "Delivering"].includes(state.activity)) return {stage: "review", title: "Your capture is being processed", detail: "Watch the confirmed status below. Keep Off available while saving, drafting or opted-in delivery finishes."};
+  if (["Blocked", "Cancelled"].includes(state.activity)) return {stage: "review", title: "Resolve the saved session", detail: "Your evidence is retained. Review the message below and use the toolbar popup for retry or recovery controls."};
+  if (state.hasResult) return {stage: "handoff", title: "Review what happened and what should change", detail: "Open the saved result, check its observed evidence, edit the expected outcome, then export for Companion or preview ticket delivery."};
+  return {stage: "capture", title: "Choose a page and state your goal", detail: "Open Panther from that page’s toolbar. Consent and Start capture there; turning Panther on alone never records."};
+}
