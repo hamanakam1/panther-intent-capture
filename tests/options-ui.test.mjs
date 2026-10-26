@@ -580,3 +580,25 @@ test("compatible service catalogue failure has a disabled retry placeholder", as
   assert.match(f.get("dashboardStatus").textContent, /Refresh to retry/);
   assert.equal(f.get("copyCompanion").disabled, false);
 });
+
+test("old-to-ready Refresh clears the obsolete diagnostics notice without reloading unsaved drafts", async () => {
+  const f = fixture(); await f.ready;
+  const title = f.fields()[0]; title.value = "Keep my unsaved wording"; title.listeners.input();
+  f.respond("GET", "health", () => legacyHealth);
+  f.respond("GET", "recordings/a/diagnostics", () => {throw new Error("Media playback is not supported in this capture release");});
+  await f.get("refresh").click();
+  assert.match(f.get("diagnosticNotice").textContent, /Requires the updated local service/);
+  f.respond("GET", "health", () => healthy);
+  f.respond("GET", "recordings/a/diagnostics", () => ({count: 0, failures: []}));
+  const draftReads = f.calls.filter(call => call.path === "tickets/a").length;
+  await f.get("refresh").click();
+  assert.equal(f.get("diagnosticNotice").textContent, "");
+  assert.equal(f.get("diagnosticsPanel").hidden, true);
+  assert.equal(f.fields()[0], title);
+  assert.equal(title.value, "Keep my unsaved wording");
+  assert.equal(title.disabled, false);
+  assert.equal(f.get("unsavedNotice").hidden, false);
+  assert.equal(f.get("copyCompanion").disabled, true);
+  assert.equal(f.calls.filter(call => call.path === "tickets/a").length, draftReads);
+  assert.equal(f.calls.some(call => call.method !== "GET"), false);
+});
