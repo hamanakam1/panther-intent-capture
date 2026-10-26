@@ -555,3 +555,28 @@ test("capture deletion rechecks readiness if the service is replaced after the p
   assert.equal(f.get("deleteCapture").disabled, true);
   assert.ok(f.fields().length > 0);
 });
+
+test("legacy missing catalogue and diagnostics routes explain the update without unrelated raw errors", async () => {
+  const f = fixture({initialHealth: legacyHealth});
+  f.respond("GET", "integrations", () => {throw new Error("Not found");});
+  f.respond("GET", "recordings/a/diagnostics", () => {throw new Error("Media playback is not supported in this capture release");});
+  await f.ready;
+  const select = f.get("deliveryDestination");
+  assert.equal(select.disabled, true);
+  assert.equal(select.hidden, false);
+  assert.equal(select.children[0].textContent, "Update required");
+  assert.match(f.get("dashboardStatus").textContent, /Requires the updated local service/);
+  assert.match(f.get("diagnosticNotice").textContent, /Requires the updated local service/);
+  assert.doesNotMatch(f.get("diagnosticNotice").textContent, /Media playback/);
+  assert.ok(f.fields().length > 0);
+});
+
+test("compatible service catalogue failure has a disabled retry placeholder", async () => {
+  const f = fixture();
+  f.respond("GET", "integrations", () => {throw new Error("Temporary failure");});
+  await f.ready;
+  assert.equal(f.get("deliveryDestination").disabled, true);
+  assert.equal(f.get("deliveryDestination").children[0].textContent, "Destination status unavailable");
+  assert.match(f.get("dashboardStatus").textContent, /Refresh to retry/);
+  assert.equal(f.get("copyCompanion").disabled, false);
+});
