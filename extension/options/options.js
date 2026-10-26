@@ -6,12 +6,15 @@ const browserControlled = location.protocol === "chrome-extension:";
 let browserPowerOn = !browserControlled;
 const $ = id => document.getElementById(id);
 let selected = null;
+let selectedVersion = 0;
 const dirtyDrafts = new Set();
 let recordings = [];
 let activePreview = null;
 let loading = false;
 let exporting = false;
 let deliverySending = false;
+let deletingCapture = null;
+const deletedCaptureIds = new Set();
 let draftRenderVersion = 0;
 let draftEditVersion = 0;
 let requestVersion = 0;
@@ -101,13 +104,15 @@ function button(label, action, className = "") {
   return node;
 }
 function syncDraftControls() {
-  const locked = !browserPowerOn || !readiness.ready || loading || (selected && automationView(automation, automationStale).locked);
+  const deletingCurrent = selected && deletingCapture?.id === selected.id;
+  const locked = !browserPowerOn || !readiness.ready || loading || deletingCurrent || (selected && automationView(automation, automationStale).locked);
   $("generate").disabled = Boolean(locked); $("generateAI").disabled = Boolean(locked);
   for (const node of $("tickets").querySelectorAll("input, textarea, button")) node.disabled = Boolean(locked || busyButtons.has(node));
-  for (const id of ["exportReplay", "exportReplayScript"]) $(id).disabled = !browserPowerOn || !readiness.ready || !selected;
-  $("deleteCapture").disabled = !browserPowerOn || !readiness.ready || !selected || loading;
+  for (const id of ["exportReplay", "exportReplayScript"]) $(id).disabled = !browserPowerOn || !readiness.ready || !selected || Boolean(deletingCurrent);
+  $("deleteCapture").disabled = !browserPowerOn || !readiness.ready || !selected || loading || Boolean(deletingCapture);
+  $("deleteCapture").textContent = deletingCurrent ? "Deleting capture…" : "Delete capture";
   $("retryAutomation").disabled = automationControlBusy || !readiness.ready;
-  $("confirmSend").disabled = !readiness.ready || !activePreview || deliverySending;
+  $("confirmSend").disabled = !readiness.ready || !activePreview || deliverySending || Boolean(deletingCurrent);
   syncUnsaved();
 }
 function renderAutomation() {
@@ -224,7 +229,7 @@ async function refresh() {
     message(error.message + " — choose Refresh after restoring the local connection.", true);
   }
   try {
-    recordings = (await api("recordings")).recordings;
+    recordings = (await api("recordings")).recordings.filter(capture => !deletedCaptureIds.has(capture.id));
     renderLibrary();
     message(recordings.length ? "Captures are ready to review." : "No captures yet. Open the extension on a web page to start.");
   } catch (error) {
@@ -289,20 +294,26 @@ function renderLibrary() {
   $("libraryEmpty").textContent = recordings.length ? "No captures match this search. Try a page name or another word." : "No captures yet. Start from Panther’s toolbar on your chosen webpage.";
   for (const capture of matching) {
     const node = button(capture.title || capture.url || "Browser capture", () => openCapture(capture.id), "capture-choice");
+    node.disabled = deletingCapture?.id === capture.id;
     node.setAttribute("aria-current", String(selected?.id === capture.id));
     node.append(element("small", new Date(capture.start_time * 1000).toLocaleString() + " · " + capture.event_count + " events"));
+    if (node.disabled) node.append(element("small", "Deletion in progress…"));
     $("recordings").append(node);
   }
 }
 async function openCapture(id) {
   if (loading) return;
+  if (deletingCapture?.id === id || deletedCaptureIds.has(id)) {
+    message("That capture is being deleted or has already been deleted. Your current review stays open."); return;
+  }
   if (dirtyDrafts.size && !confirm("Leave this capture and discard unsaved draft edits? Saved evidence will remain.")) return;
   const version = ++requestVersion;
   activePreview = null; $("previewDialog").close();
   clearTimeout(automationTimer);
   const [capture, evidence] = await Promise.all([api("recordings/" + id), api("recordings/" + id + "/events")]);
-  if (version !== requestVersion) return;
+  if (version !== requestVersion || deletedCaptureIds.has(id)) return;
   selected = capture;
+  selectedVersion = version;
   dirtyDrafts.clear(); syncUnsaved();
   automation = null; automationStale = false; renderedDraftCount = 0;
   $("tickets").replaceChildren(); renderAutomation();
@@ -375,7 +386,7 @@ async function generate(useAI) {
 }
 function syncUnsaved() {
   $("unsavedNotice").hidden = dirtyDrafts.size === 0;
-  for (const id of ["export", "exportCompanion", "copyCompanion"]) $(id).disabled = dirtyDrafts.size > 0 || exporting || loading || !selected || !browserPowerOn || !readiness.ready;
+  for (const id of ["export", "exportCompanion", "copyCompanion"]) $(id).disabled = dirtyDrafts.size > 0 || exporting || loading || !selected || !browserPowerOn || !readiness.ready || Boolean(selected && deletingCapture?.id === selected.id);
 }
 function renderTickets(data, recordingId = selected.id) {
   const renderVersion = ++draftRenderVersion, viewVersion = requestVersion;
@@ -496,12 +507,29 @@ $("confirmSend").addEventListener("click", async () => {
   } finally { deliverySending = false; if (activePreview === pendingPreview) $("confirmSend").disabled = !readiness.ready; }
 });
 $("deleteCapture").addEventListener("click", async () => {
-  if (!selected || !confirm("Delete this capture and its local evidence? Tickets already sent to other systems remain there.")) return;
+  if (!selected || deletingCapture || !confirm("Delete this capture and its local evidence? Tickets already sent to other systems remain there.")) return;
+  const target = {id: selected.id, title: selected.title || "this capture"};
+  deletingCapture = target; syncDraftControls(); renderLibrary();
   try {
-    await api("recordings/" + selected.id, undefined, "DELETE");
-    ++requestVersion; clearTimeout(automationTimer); selected = null; automation = null;
-    $("captureView").hidden = true; $("emptyReview").hidden = false; await refresh();
-  } catch (error) { message(error.message, true); }
+    await api("recordings/" + target.id, undefined, "DELETE");
+    deletedCaptureIds.add(target.id);
+    recordings = recordings.filter(capture => capture.id !== target.id); renderLibrary();
+    if (selected?.id === target.id) {
+      // Invalidate work for this view, but not a newer selection still loading.
+      if (requestVersion === selectedVersion) ++requestVersion;
+      clearTimeout(automationTimer); selected = null; automation = null; activePreview = null;
+      dirtyDrafts.clear(); $("previewDialog").close();
+      $("captureView").hidden = true; $("emptyReview").hidden = false;
+    }
+    // A different capture may now be open or loading. Its view generation,
+    // fields and dirty state belong to that review, not this completed delete.
+    await refresh();
+    message(`Deleted “${target.title}”. Tickets already sent to other systems remain there.`);
+  } catch (error) {
+    message(`Could not confirm deletion of “${target.title}”: ${error.message} Your current draft edits are still here. Choose Refresh to check saved captures before retrying.`, true);
+  } finally {
+    deletingCapture = null; syncDraftControls(); renderLibrary();
+  }
 });
 function download(name, content, type) {
   const blob = new Blob([content], {type});

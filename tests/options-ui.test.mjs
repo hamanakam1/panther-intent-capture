@@ -602,3 +602,97 @@ test("old-to-ready Refresh clears the obsolete diagnostics notice without reload
   assert.equal(f.calls.filter(call => call.path === "tickets/a").length, draftReads);
   assert.equal(f.calls.some(call => call.method !== "GET"), false);
 });
+
+test("deleting A preserves B's newer view, dirty input nodes and save response", async () => {
+  const f = fixture(); await f.ready;
+  const deletion = deferred(); f.respond("DELETE", "recordings/a", () => deletion.promise);
+  const deleting = f.get("deleteCapture").click(); await flush();
+  assert.ok(f.fields().every(field => field.disabled));
+  await f.open("b");
+  const title = f.fields()[0]; title.value = "My unsaved intention for B"; title.listeners.input();
+  deletion.resolve({ok: true}); await deleting;
+  assert.equal(f.get("captureTitle").textContent, "Capture b");
+  assert.equal(f.get("captureView").hidden, false);
+  assert.equal(f.fields()[0], title);
+  assert.equal(title.value, "My unsaved intention for B");
+  assert.equal(title.disabled, false);
+  assert.equal(f.get("unsavedNotice").hidden, false);
+  assert.equal(f.get("copyCompanion").disabled, true);
+  assert.equal(f.get("recordings").children.some(node => node.textContent.startsWith("Capture a")), false, "even a stale list response cannot restore deleted A");
+  f.respond("POST", "tickets/b/review", () => ({ok: true}));
+  await f.draftButton("Save draft edits").click();
+  assert.equal(f.get("unsavedNotice").hidden, true, "B's request generation stays valid");
+});
+
+test("duplicate deletion clicks send one request and A cannot reopen while its deletion is pending", async () => {
+  const f = fixture(); await f.ready;
+  const deletion = deferred(); f.respond("DELETE", "recordings/a", () => deletion.promise);
+  const deleting = f.get("deleteCapture").click(); await flush();
+  assert.equal(f.get("deleteCapture").disabled, true);
+  await f.get("deleteCapture").listeners.click();
+  await f.open("b");
+  const fields = f.fields();
+  const deletingRow = f.get("recordings").children.find(node => node.textContent.startsWith("Capture a"));
+  assert.equal(deletingRow.disabled, true);
+  await deletingRow.listeners.click(); // Handler guard also rejects a stale control.
+  assert.equal(f.get("captureTitle").textContent, "Capture b");
+  assert.equal(f.fields()[0], fields[0]);
+  deletion.resolve({ok: true}); await deleting;
+  assert.equal(f.calls.filter(call => call.method === "DELETE").length, 1);
+  assert.equal(f.get("captureTitle").textContent, "Capture b");
+  assert.equal(f.get("recordings").children.some(node => node.textContent.startsWith("Capture a")), false);
+});
+
+test("a late deletion failure identifies A and preserves B's unsaved review", async () => {
+  const f = fixture(); await f.ready;
+  const deletion = deferred(); f.respond("DELETE", "recordings/a", () => deletion.promise);
+  const deleting = f.get("deleteCapture").click(); await flush();
+  await f.open("b");
+  const title = f.fields()[0]; title.value = "Keep B after A fails"; title.listeners.input();
+  deletion.reject(new Error("Connection lost")); await deleting;
+  assert.equal(f.get("captureView").hidden, false);
+  assert.equal(f.fields()[0], title);
+  assert.equal(title.value, "Keep B after A fails");
+  assert.equal(f.get("unsavedNotice").hidden, false);
+  assert.equal(f.get("deleteCapture").disabled, false);
+  assert.match(f.get("message").textContent, /Could not confirm deletion of “Capture a”/);
+  assert.match(f.get("message").textContent, /Refresh.*before retrying/);
+  assert.equal(f.get("recordings").children.find(node => node.textContent.startsWith("Capture a")).disabled, false);
+});
+
+test("successful deletion closes its current view and does not show a ghost capture", async () => {
+  const f = fixture(); await f.ready;
+  f.respond("DELETE", "recordings/a", () => ({ok: true}));
+  await f.get("deleteCapture").click();
+  assert.equal(f.get("captureView").hidden, true);
+  assert.equal(f.get("emptyReview").hidden, false);
+  assert.equal(f.get("copyCompanion").disabled, true);
+  assert.equal(f.get("recordings").children.some(node => node.textContent.startsWith("Capture a")), false);
+  assert.match(f.get("message").textContent, /Deleted “Capture a”/);
+});
+
+test("deleting A while B is loading does not invalidate B's incoming view", async () => {
+  const f = fixture(); await f.ready;
+  const deletion = deferred(), loadingB = deferred();
+  f.respond("DELETE", "recordings/a", () => deletion.promise);
+  f.respond("GET", "recordings/b", () => loadingB.promise);
+  const deleting = f.get("deleteCapture").click(); await flush();
+  const openingB = f.open("b"); await flush();
+  deletion.resolve({ok: true}); await deleting;
+  loadingB.resolve(capture("b")); await openingB;
+  assert.equal(f.get("captureTitle").textContent, "Capture b");
+  assert.equal(f.get("captureView").hidden, false);
+  assert.equal(f.fields()[0].value, "Review b");
+});
+
+test("a deleted current capture cannot return through a delayed draft response", async () => {
+  const f = fixture(); await f.ready;
+  const lateDrafts = deferred(); f.respond("GET", "tickets/a", () => lateDrafts.promise);
+  const reopening = f.open("a"); await flush();
+  f.respond("DELETE", "recordings/a", () => ({ok: true}));
+  await f.get("deleteCapture").click();
+  lateDrafts.resolve(drafts("a")); await reopening;
+  assert.equal(f.get("captureView").hidden, true);
+  assert.equal(f.get("emptyReview").hidden, false);
+  assert.equal(f.get("recordings").children.some(node => node.textContent.startsWith("Capture a")), false);
+});
