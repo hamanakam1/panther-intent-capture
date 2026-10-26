@@ -211,7 +211,9 @@ async function renderDiagnostics(id, version) {
   } catch (error) {
     if (version !== requestVersion || selected?.id !== id) return;
     $("diagnosticsPanel").hidden = false;
-    $("diagnosticNotice").textContent = "Page-reported failures are unavailable: " + error.message;
+    $("diagnosticNotice").textContent = readiness.ready
+      ? "Page-reported failures are unavailable: " + error.message
+      : "Requires the updated local service. Saved interactions remain available to inspect.";
   }
 }
 async function refresh() {
@@ -233,7 +235,17 @@ async function refresh() {
   try {
     const catalogue = await api("integrations");
     renderDestinations(catalogue.destinations || []);
-  } catch (_) { $("dashboardStatus").textContent = "Delivery destination status unavailable"; }
+  } catch (_) {
+    const option = element("option", readiness.ready ? "Destination status unavailable" : "Update required");
+    option.value = ""; option.disabled = true;
+    $("deliveryDestination").replaceChildren(option);
+    $("deliveryDestination").value = "";
+    $("deliveryDestination").hidden = false;
+    $("deliveryDestination").disabled = true;
+    deliveryKind = ""; activePreview = null; $("previewDialog").close();
+    $("dashboardStatus").textContent = readiness.ready ? "Delivery destination status unavailable · choose Refresh to retry"
+      : "Requires the updated local service. Saved captures remain available to inspect.";
+  }
 }
 
 /** Show every delivery destination and let one be chosen for manual delivery. */
@@ -251,16 +263,17 @@ function renderDestinations(list) {
   });
   if (!chosen) {
     const placeholder = document.createElement("option");
-    placeholder.value = ""; placeholder.textContent = "No destination configured"; placeholder.disabled = true;
+    placeholder.value = ""; placeholder.textContent = readiness.ready ? "No destination configured" : "Update required"; placeholder.disabled = true;
     options.unshift(placeholder);
   }
   $("deliveryDestination").replaceChildren(...options);
   $("deliveryDestination").value = chosen ? chosen.kind : "";
-  $("deliveryDestination").hidden = list.length < 2;
-  $("deliveryDestination").disabled = !chosen;
+  $("deliveryDestination").hidden = readiness.ready && list.length < 2;
+  $("deliveryDestination").disabled = !chosen || !readiness.ready;
   deliveryKind = chosen ? chosen.kind : "";
   const selected = list.find(destination => destination.kind === deliveryKind);
-  $("dashboardStatus").textContent = !selected ? "Delivery destination not configured · capture and JSON export still work"
+  $("dashboardStatus").textContent = !readiness.ready ? "Delivery is paused until the local service update is confirmed."
+    : !selected ? "Delivery destination not configured · capture and JSON export still work"
     : selected.available ? `${selected.label} reachable · delivery verified when sent`
       : selected.configured ? `${selected.label} configured but not reachable · JSON export still works`
         : `${selected.label} is not configured · capture and JSON export still work`;
