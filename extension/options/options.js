@@ -53,6 +53,7 @@ async function checkReadiness() {
 }
 function requiresReviewContract(path, method, body) {
   return path.startsWith("export/") || /\breplay(?:\?|$)/.test(path)
+    || method === "DELETE"
     || (method !== "GET" && (path.startsWith("tickets/") || path.startsWith("integrations/")
       || (path.startsWith("automation/") && body?.action !== "cancel")));
 }
@@ -104,6 +105,7 @@ function syncDraftControls() {
   $("generate").disabled = Boolean(locked); $("generateAI").disabled = Boolean(locked);
   for (const node of $("tickets").querySelectorAll("input, textarea, button")) node.disabled = Boolean(locked || busyButtons.has(node));
   for (const id of ["exportReplay", "exportReplayScript"]) $(id).disabled = !browserPowerOn || !readiness.ready || !selected;
+  $("deleteCapture").disabled = !browserPowerOn || !readiness.ready || !selected || loading;
   $("retryAutomation").disabled = automationControlBusy || !readiness.ready;
   $("confirmSend").disabled = !readiness.ready || !activePreview || deliverySending;
   syncUnsaved();
