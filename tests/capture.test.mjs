@@ -910,3 +910,21 @@ test("Off during destination discovery prevents later injection and capture crea
   assert.equal(f.calls.inject.length, 0);
   assert.equal(f.data[SESSION_KEY], undefined);
 });
+
+test("captured goal is supplied only to trusted extension status, including after Save", async () => {
+  const f = fixture(); await f.start({goal: "Preserve selection token=private-goal-secret"});
+  const popup = await f.send("extension.getStatus");
+  assert.match(popup.session.goal, /Preserve selection/);
+  assert.doesNotMatch(popup.session.goal, /private-goal-secret/);
+  assert.equal(popup.live, undefined);
+  assert.equal((await f.send("page.getStatus", {}, page)).session.goal, undefined);
+  const forged = await f.send("extension.getStatus", {}, page);
+  assert.equal(forged.ok, false); assert.equal(forged.session, undefined);
+  await f.event(); await f.send("extension.stopRecording");
+  const saved = await f.send("extension.getStatus");
+  assert.match(saved.result.goal, /Preserve selection/);
+  assert.doesNotMatch(saved.result.goal, /private-goal-secret/);
+  const publicSaved = await f.send("page.getStatus", {}, page);
+  assert.equal(publicSaved.result.goal, undefined);
+  assert.equal(publicSaved.result.live, undefined);
+});
