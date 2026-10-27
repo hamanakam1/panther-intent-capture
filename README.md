@@ -29,6 +29,29 @@ Turn a browser session into a clear, reviewable request for improvement.
 
 Panther records the interactions you choose to capture, keeps the evidence on your computer, and turns intent into tickets. Configure a compatible local ticket service and opt into automatic delivery for a session to save, generate, deliver, and verify without a separate click for each ticket. Or use manual review and JSON export without any destination. **Panther creates tickets; it does not implement the work.**
 
+```mermaid
+flowchart LR
+    subgraph Browser["Browser Extension (Manifest V3)"]
+        REC["<b>Chosen-Tab Capture</b><br/><i>clicks, navigation, errors<br/>(no typed text)</i>"]
+        WIN["<b>Persistent Status Window</b><br/><i>live activity & friction</i>"]
+        REC --> WIN
+    end
+
+    subgraph Backend["Local Python Backend (:7890)"]
+        STORE[("<b>Private Storage</b><br/><i>~/.panther-intent-capture</i>")]
+        OLLAMA["<b>Optional Local AI</b><br/><i>Ollama / Qwen (no cloud)</i>"]
+        WIN --> STORE
+        STORE <--> OLLAMA
+    end
+
+    subgraph Destinations["Explicit Destinations"]
+        TICK["<b>Local Ticket Service</b><br/><i>backlog + no-auto fence</i>"]
+        FILE["<b>Local JSONL File</b><br/><i>deliveries.jsonl</i>"]
+        GH["<b>GitHub Issues</b><br/><i>explicit session token</i>"]
+        STORE --> TICK & FILE & GH
+    end
+```
+
 The current implementation targets Chrome and Microsoft Edge 116+ with a Manifest V3 extension and a small Python backend. Browser-controlled backend startup is packaged for macOS and Linux; Windows helper packaging remains unimplemented. Capture works on ordinary `http` and `https` pages that allow extension injection. You do not need to add each website to the manifest. Browser settings pages, extension stores, embedded frames, and native desktop applications are outside the supported capture scope.
 
 ## What it looks like
@@ -94,6 +117,8 @@ There is no default ticket destination. Configure a loopback origin with `--dash
 
 A second destination is available: **GitHub issues**, configured with `PANTHER_GITHUB_TOKEN` and `PANTHER_GITHUB_REPO` on the backend. It is a remote destination, so it is off until it is configured, it needs its own credential, and its target is frozen for a session the moment consent is given. The local ticket service stays loopback-only. See [the GitHub destination](docs/GITHUB_DESTINATION.md).
 
+A third destination is available: **a local file.** Configure `PANTHER_LOCAL_DESTINATION` to an absolute path inside `PANTHER_DATA_DIR` (for example `~/.panther-intent-capture/deliveries.jsonl`). Reviewed drafts are appended as JSONL lines with the same preview, explicit confirmation, durable receipt, and idempotent-identity contract as the other adapters. Delivery never authorizes execution; delivered tickets are review-only proposals.
+
 Submitted tickets contain a bounded summary of intent, observed evidence, reproduction steps, acceptance criteria, source URL, timestamps, and provenance. Media references are not uploaded screenshot attachments. Automatically delivered tickets are **unreviewed proposals**, not verified bugs. Sending a draft grants no permission to execute it: tickets enter backlog with the `no-auto` review fence.
 
 ### Intent bundle
@@ -110,6 +135,7 @@ Browser-controlled operation stores configuration during [helper setup](docs/BRO
 |---|---|---|
 | `PANTHER_DATA_DIR` | `~/.panther-intent-capture` | Private capture, draft, and receipt storage. |
 | `PANTHER_DASHBOARD_URL` | Unset; delivery disabled | Explicit compatible ticket-service loopback HTTP(S) origin. Remote addresses and redirects are rejected. |
+| `PANTHER_LOCAL_DESTINATION` | Unset; local file delivery disabled | Absolute path to a JSONL file inside `PANTHER_DATA_DIR` where reviewed drafts are delivered. |
 | `OLLAMA_ENDPOINT` | `http://127.0.0.1:11434/v1` | Local OpenAI-compatible inference endpoint. A loopback HTTP address is required. |
 | `OLLAMA_MODEL` | `qwen3.8-hermes:latest` | Model name used only when local AI generation is explicitly requested. It must already be available on your computer. |
 | `EXTENSION_BACKEND_PORT` | `7890` | Backend listener port. The shipped extension expects `7890`; changing this also requires updating its backend origin and host permission. |
