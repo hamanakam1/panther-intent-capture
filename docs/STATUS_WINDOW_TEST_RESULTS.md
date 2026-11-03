@@ -35,3 +35,9 @@ Observed:
 - Native On confirms an owned process, not continuous backend, model, or destination health. Delivery counters are historical receipts, not continuous destination readback.
 - Real automatic generation/delivery transitions, a configured model, personal Edge installation/reload, screen-reader behavior, browser zoom, broad website compatibility, and live destination readback were not qualified by this window check.
 - The temporary test backend was shut down. Existing personal helper registration, captured data, and other services were not modified.
+
+## Correction found after 1.4.0
+
+The shipped status-window page carried a stale second copy of four sections after its closing `</html>` tag. The browser folds that trailing markup back into the body, so the window rendered the understanding, activity, evidence and control sections twice, and `getElementById` resolved to the first copy of each control while the second copy stayed stale. The 1.4.0 loaded-browser check above did not notice it, because the first copy of each control behaved correctly.
+
+The duplicate is removed, and a markup-integrity regression now keeps every extension page a single document with unique element ids. The fix changes what the window shows, not what it does: the same controls, the same status, the same Off actions, in one copy.
