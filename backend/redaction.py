@@ -211,6 +211,10 @@ def sanitize_capture_event(payload: Any) -> Any:
         href = target.get("href")
         if isinstance(href, str) and href:
             semantic["href"] = sanitize_url(href)
+        # A click on an element the page never marked as a control. Only the
+        # extension's own true flag is kept.
+        if target.get("inert") is True:
+            semantic["inert"] = True
         event["target"] = semantic
     return event
 

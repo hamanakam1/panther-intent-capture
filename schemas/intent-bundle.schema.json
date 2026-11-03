@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/hamanakam1/panther-intent-capture/main/schemas/intent-bundle.schema.json",
-  "title": "Panther portable intent bundle 1.1",
-  "description": "Destination-independent export of reviewable browser-evidence drafts. Observed actions, unverified hypotheses, and proposed verification steps remain separate. Page-reported failures are observations of what the page's own error stream said, not verified defects. Schema validation establishes structure, not truth, successful delivery, or permission to execute. No raw event payloads, image bytes, or local artifact paths belong in this bundle.",
+  "title": "Panther portable intent bundle 1.2",
+  "description": "Destination-independent export of reviewable browser-evidence drafts. Observed actions, unverified hypotheses, and proposed verification steps remain separate. Page-reported failures are observations of what the page's own error stream said, not verified defects. Friction signals are hypotheses about the recorded actions, not confirmed defects. Schema validation establishes structure, not truth, successful delivery, or permission to execute. No raw event payloads, image bytes, or local artifact paths belong in this bundle.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "schema_version", "producer", "exported_at", "recording", "tickets", "authority"],
   "properties": {
     "schema": { "const": "https://github.com/hamanakam1/panther-intent-capture#intent-bundle" },
-    "schema_version": { "const": "1.1" },
+    "schema_version": { "const": "1.2" },
     "producer": { "const": "panther-intent-capture" },
     "exported_at": { "type": "number", "minimum": 0, "description": "Export creation time as Unix seconds, possibly fractional; not an evidence-verification time." },
     "recording": { "$ref": "#/$defs/recording" },
@@ -61,6 +61,19 @@
         "event_count": { "type": "integer", "minimum": 0, "description": "Total stored events, which may exceed the subset used to generate a draft." },
         "screenshot_count": { "type": "integer", "minimum": 0, "description": "Number of captured screenshots, not a claim that an inference model analyzed them." },
         "diagnostic_count": { "type": "integer", "minimum": 0, "description": "Number of page-reported failures recorded during this capture. A failure is what the page's own error stream said; it is not a verified defect." }
+      }
+    },
+    "friction": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One possible-friction hypothesis derived from the recorded actions. It is a possibility about what happened, never a confirmed defect and never a permission to act. A draft generated before version 1.2 omits this field.",
+      "required": ["kind", "title", "detail", "event_indices", "hypothesis"],
+      "properties": {
+        "kind": { "type": "string", "maxLength": 60, "description": "The hypothesis channel. Current values are repeated_clicks and non_control_click." },
+        "title": { "type": "string", "maxLength": 200 },
+        "detail": { "type": "string", "maxLength": 600, "description": "What was observed and what it might mean. It must not read as a confirmed diagnosis." },
+        "event_indices": { "type": "array", "maxItems": 50, "items": { "type": "integer", "minimum": 1 }, "description": "1-based indices of the recorded events this hypothesis was derived from." },
+        "hypothesis": { "const": true, "description": "Always true. A friction signal is a hypothesis; a producer that emits false is describing a confirmed defect, which this contract does not allow." }
       }
     },
     "diagnostic": {
@@ -130,7 +143,7 @@
     "ticket": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "description", "hypothesis", "steps_to_reproduce", "suggested_verification_steps", "acceptance_criteria", "desired_behavior", "questions", "component", "priority", "evidence", "evidence_refs", "diagnostics", "screenshot_timestamps", "source_url", "provenance", "status", "requires_review", "execution_authorized"],
+      "required": ["id", "title", "description", "hypothesis", "steps_to_reproduce", "suggested_verification_steps", "acceptance_criteria", "desired_behavior", "questions", "component", "priority", "evidence", "evidence_refs", "diagnostics", "friction", "screenshot_timestamps", "source_url", "provenance", "status", "requires_review", "execution_authorized"],
       "properties": {
         "id": { "$ref": "#/$defs/identifier" },
         "title": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": "\\S" },
@@ -146,6 +159,7 @@
         "evidence": { "type": "string", "maxLength": 6000, "description": "Observed-context summary. Recorded actions alone cannot prove that a proposed bug exists." },
         "evidence_refs": { "type": "array", "maxItems": 30, "items": { "$ref": "#/$defs/evidenceReference" } },
         "diagnostics": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/diagnostic" }, "description": "Page-reported failures relevant to this draft. They are observations of what the page said, never a verified defect. A draft generated before version 1.1 omits this field." },
+        "friction": { "type": "array", "maxItems": 10, "items": { "$ref": "#/$defs/friction" }, "description": "Possible-friction hypotheses derived from the recorded actions. They are not confirmed defects. A draft generated before version 1.2 omits this field." },
         "screenshot_timestamps": { "type": "array", "maxItems": 20, "items": { "type": "number", "minimum": 0 }, "description": "Legacy frame offsets in seconds. These are references only, with no image content and no assertion that media was analyzed." },
         "source_url": { "$ref": "#/$defs/sourceUrl" },
         "provenance": { "$ref": "#/$defs/provenance" },

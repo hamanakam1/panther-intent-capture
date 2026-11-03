@@ -31,17 +31,20 @@ The component sketch below preserves the earlier high-level overview, not the co
 │  ├── api/routes.py         - API endpoints                                  │
 │  ├── storage.py            - Local storage (~/.panther-intent-capture/)    │
 │  ├── automation.py         - Durable job queue for auto-delivery            │
+│  ├── destinations.py       - Registry of delivery destinations              │
 │  ├── integrations.py       - Optional local ticket-service adapter         │
+│  ├── github.py             - Optional GitHub issues adapter (remote)        │
+│  ├── replay.py             - Replay plan for a captured flow                │
 │  ├── inference.py          - Ollama integration for AI generation           │
 │  ├── redaction.py          - Secret/credential redaction                    │
 │  └── tickets.py            - Intent decomposition to tickets                 │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │ HTTP
-                                    │ Explicitly configured loopback origin
+                                    │ Explicitly configured destination
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Compatible local ticket service                    │
-│                         Optional; no default destination                   │
+│          A compatible local ticket service, or a GitHub repository         │
+│          Optional; no default destination; the local one stays loopback   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -127,6 +130,8 @@ Capture start/stop is controlled inside the extension, not through HTTP start/st
 - `POST /record` - Save a stopped capture and admit an explicitly opted-in automatic policy
 - `GET /recordings` - List saved captures
 - `GET /recordings/:id/diagnostics` - Read the page-reported failures a capture recorded
+- `GET /recordings/:id/replay` - Read the replay plan for a capture, as JSON or as a Playwright script
+- `GET /integrations` - List every delivery destination with its status
 - `GET /tickets/:id` and `POST /tickets/:id` - Read or generate drafts for a capture
 - `POST /tickets/:id/review` - Save reviewed draft edits
 - `POST /integrations/ticket-service/preview/:id` and `POST /integrations/ticket-service/submit/:id` - Preview and confirm manual ticket delivery

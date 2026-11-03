@@ -111,6 +111,25 @@ class BundleContractTests(unittest.TestCase):
         # A capture without failures still carries the field, and it is empty.
         self.assertEqual(generated_bundle(False)["tickets"][0]["diagnostics"], [])
 
+    def test_friction_hypotheses_travel_as_possibilities_not_as_confirmed_defects(self):
+        events = EVENTS + [
+            {"type": "click", "ts": 1002250, "url": "http://127.0.0.1:8080/",
+             "target": {"tag": "button", "id": "save", "label": "Save"}},
+            {"type": "click", "ts": 1002450, "url": "http://127.0.0.1:8080/",
+             "target": {"tag": "button", "id": "save", "label": "Save"}},
+            {"type": "click", "ts": 1002650, "url": "http://127.0.0.1:8080/",
+             "target": {"tag": "button", "id": "save", "label": "Save"}},
+        ]
+        bundle = generated_bundle(False, events)
+        friction = bundle["tickets"][0]["friction"]
+        self.assertTrue(friction)
+        for finding in friction:
+            self.assertTrue(finding["hypothesis"])
+            self.assertIn(finding["kind"], {"repeated_clicks", "non_control_click"})
+            self.assertTrue(finding["event_indices"])
+        self.assertFalse(bundle["tickets"][0]["provenance"]["proposal_verified"])
+        self.assertFalse(bundle["tickets"][0]["execution_authorized"])
+
     def test_authority_is_literal_false_in_export_and_contract(self):
         bundle = generated_bundle(True)
         self.assertEqual(bundle["authority"], {"export_only": True, "requires_review": True, "execution_authorized": False})

@@ -16,7 +16,10 @@ MAX_FRAMES = 8
 MAX_DRAFTS = 20
 MAX_EVENTS = 300
 MAX_DIAGNOSTICS = 20
-GENERATION_REVISION = 3
+MAX_FRICTION = 10
+FRICTION_WINDOW_MS = 10000
+REPEATED_CLICK_THRESHOLD = 3
+GENERATION_REVISION = 4
 
 
 class DraftGenerationError(RuntimeError):
@@ -142,6 +145,93 @@ def capture_diagnostics(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _control_identity(event: Dict[str, Any]) -> str:
+    """A stable identity for a control, or an empty string.
+
+    Different controls must never collapse into one group, so an identity is
+    only formed when the capture carries a distinguishing identifier that was
+    not redacted.
+    """
+    target = event.get("target") if isinstance(event.get("target"), dict) else {}
+    url = sanitize_url(event.get("url"))
+    if not url:
+        return ""
+    identifiers = []
+    for key in ("id", "dataTab", "dataTicket"):
+        value = target.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        if "REDACTED" in value or "[EMAIL]" in value:
+            return ""
+        identifiers.append(value)
+    if not identifiers:
+        return ""
+    return json.dumps([url, _text(target.get("tag"), 40), _text(target.get("role"), 40), *identifiers])
+
+
+def _friction(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Derive possible-friction hypotheses from the observed timeline.
+
+    Every finding here is a possibility, not a confirmed defect. A person may
+    repeat a click on purpose, and an element that looks interactive may work
+    perfectly well.
+    """
+    findings: List[Dict[str, Any]] = []
+    groups: Dict[str, List[tuple]] = {}
+    for index, event in enumerate(events, start=1):
+        if not isinstance(event, dict) or event.get("type") != "click":
+            continue
+        identity = _control_identity(event)
+        if identity:
+            groups.setdefault(identity, []).append((index, event))
+    for entries in groups.values():
+        timed = [(index, event.get("ts")) for index, event in entries
+                 if isinstance(event.get("ts"), (int, float)) and not isinstance(event.get("ts"), bool)
+                 and math.isfinite(event.get("ts"))]
+        best: List[tuple] = []
+        for index, ts in timed:
+            window = [item for item in best + [(index, ts)] if ts - item[1] <= FRICTION_WINDOW_MS]
+            if len(window) > len(best):
+                best = window
+        if len(best) >= REPEATED_CLICK_THRESHOLD:
+            findings.append({
+                "kind": "repeated_clicks",
+                "title": "Repeated clicks on one control",
+                "detail": (f"{len(best)} clicks on the same control within {FRICTION_WINDOW_MS // 1000} seconds "
+                           "may indicate an unclear or unresponsive control, or intentional repetition. "
+                           "No failure is verified."),
+                "event_indices": [item[0] for item in best],
+                "hypothesis": True,
+            })
+    inert = [index for index, event in enumerate(events, start=1)
+             if isinstance(event, dict) and event.get("type") == "click"
+             and isinstance(event.get("target"), dict) and event["target"].get("inert") is True]
+    if inert:
+        findings.append({
+            "kind": "non_control_click",
+            "title": "Clicked an element that is not a control",
+            "detail": (f"{len(inert)} click(s) landed on an element the page never marked as a control, "
+                       "although it presented itself as interactive. The control may be missing a role or an "
+                       "accessible name, or the click may have had no effect. No failure is verified."),
+            "event_indices": inert,
+            "hypothesis": True,
+        })
+    findings.sort(key=lambda finding: finding["event_indices"][0])
+    return findings[:MAX_FRICTION]
+
+
+def _friction_note(findings: List[Dict[str, Any]]) -> str:
+    """A bounded, human-readable summary of the possible friction."""
+    if not findings:
+        return ""
+    lines = [f"- {finding['title']}: {finding['detail']}" for finding in findings[:5]]
+    more = len(findings) - len(lines)
+    if more > 0:
+        lines.append(f"- {more} further possible friction signal(s) not listed")
+    return ("\n\nPossible friction (hypotheses from the recorded actions, not confirmed defects):\n"
+            + "\n".join(lines))
+
+
 def _failure_note(failures: List[Dict[str, Any]]) -> str:
     """A bounded, human-readable summary of the page's own failures."""
     if not failures:
@@ -159,7 +249,7 @@ def summarize_events_for_decomposition(events: List[Dict[str, Any]]) -> str:
 
 
 def _ollama_decompose(frames: List[Dict[str, Any]], events_summary: str, goal: str = "",
-                      failures_summary: str = "") -> str:
+                      failures_summary: str = "", friction_summary: str = "") -> str:
     messages = [
         {"role": "system", "content": (
             "Draft reviewable bug or improvement tickets from browser evidence. "
@@ -167,6 +257,7 @@ def _ollama_decompose(frames: List[Dict[str, Any]], events_summary: str, goal: s
             "Use the person's stated goal when provided; distinguish observations, hypotheses and missing context. "
             "Page-reported failures are what the page's own error stream said; they are observations, not proof that "
             "the person hit that defect, and not a reproduction. "
+            "Possible friction signals are hypotheses about the recorded actions; they are not confirmed defects. "
             "Return ONLY a JSON array, at most 20 objects. Each object must have a nonempty title, description, "
             "steps_to_reproduce (array of strings), acceptance_criteria (array of strings), "
             "component (string), priority (low/medium/high), evidence (string), "
@@ -178,6 +269,7 @@ def _ollama_decompose(frames: List[Dict[str, Any]], events_summary: str, goal: s
             {"type": "text", "text": (
                 f"Person's stated goal: {goal or 'Not provided'}\n\nObserved events:\n{events_summary}"
                 f"\n\nPage-reported failures:\n{failures_summary or 'None observed.'}"
+                f"\n\nPossible friction:\n{friction_summary or 'None observed.'}"
             )},
             *[{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{frame['jpeg']}"}} for frame in frames],
         ]},
@@ -233,6 +325,8 @@ def generate_drafts(recording: Dict[str, Any], events: List[Dict[str, Any]], use
     failures = _diagnostics(observed)
     failure_lines = [_failure_line(failure) for failure in failures]
     failures_summary = "\n".join(f"- {line}" for line in failure_lines[:10]) if failure_lines else ""
+    friction = _friction(observed)
+    friction_summary = "\n".join(f"- {finding['title']}: {finding['detail']}" for finding in friction[:5]) if friction else ""
     if use_ai:
         start_ms = float(recording.get("start_time", 0)) * 1000
         relative_seconds = [
@@ -241,7 +335,7 @@ def generate_drafts(recording: Dict[str, Any], events: List[Dict[str, Any]], use
         ]
         frames = _sample_key_frames(recording.get("video_path", ""), relative_seconds)
         try:
-            raw = _ollama_decompose(frames, summarize_events_for_decomposition(observed), goal, failures_summary)
+            raw = _ollama_decompose(frames, summarize_events_for_decomposition(observed), goal, failures_summary, friction_summary)
             candidates = _parse_model(raw)
         except DraftGenerationError:
             raise
@@ -255,12 +349,13 @@ def generate_drafts(recording: Dict[str, Any], events: List[Dict[str, Any]], use
             "description": (
                 f"Stated goal: {goal}\n\n" if goal else "No intended outcome was supplied.\n\n"
             ) + "This draft summarizes recorded actions. Review the evidence and describe any bug or improvement before sending."
-            + _failure_note(failures),
+            + _failure_note(failures) + _friction_note(friction),
             "steps_to_reproduce": [_event_step(event) for event in observed[:20]],
             "acceptance_criteria": [], "component": "unspecified",
             "priority": "medium",
             "evidence": f"{scope}; no AI inference was performed."
-                        + (f" The page reported {len(failures)} failure(s) during this capture." if failures else ""),
+                        + (f" The page reported {len(failures)} failure(s) during this capture." if failures else "")
+                        + (f" {len(friction)} possible friction signal(s) were observed." if friction else ""),
             "event_indices": list(range(1, min(len(observed), 50) + 1)),
             "desired_behavior": goal,
             "questions": ["What should happen, and what happened instead?"] if not goal else ["What observable result would confirm this change?"],
@@ -294,14 +389,20 @@ def generate_drafts(recording: Dict[str, Any], events: List[Dict[str, Any]], use
         draft_failures = failures if not use_ai else [
             failure for failure in failures if failure["event_index"] in set(indices)
         ]
+        # The friction signals that belong to this draft's own evidence.
+        draft_friction = friction if not use_ai else [
+            finding for finding in friction if set(finding["event_indices"]) & set(indices)
+        ]
         if use_ai:
             if not title.lower().startswith(("investigate", "review", "possible", "potential")):
                 title = f"Investigate: {title}"[:120]
-            description = ("Unverified AI proposal: " + description + _failure_note(draft_failures))[:2000]
+            description = ("Unverified AI proposal: " + description
+                           + _failure_note(draft_failures) + _friction_note(draft_friction))[:2000]
         observed_steps = [_event_step(observed[event_index - 1]) for event_index in indices[:20]]
         evidence = (
             f"{scope}; {len(references)} event references attached. "
             + (f"The page reported {len(draft_failures)} failure(s). " if draft_failures else "")
+            + (f"{len(draft_friction)} possible friction signal(s) were observed. " if draft_friction else "")
             + "These observations do not establish a bug. Verify the proposed issue against the capture."
         ) if use_ai else _text(candidate.get("evidence"), 1000)
         drafts.append({
@@ -318,6 +419,7 @@ def generate_drafts(recording: Dict[str, Any], events: List[Dict[str, Any]], use
             "priority": priority if priority in ("low", "medium", "high") else "medium",
             "evidence": evidence, "evidence_refs": references,
             "diagnostics": draft_failures,
+            "friction": draft_friction,
             "status": "draft", "requires_review": True, "execution_authorized": False,
             "provenance": {
                 "producer": "panther-intent-capture", "recording_id": recording_id,

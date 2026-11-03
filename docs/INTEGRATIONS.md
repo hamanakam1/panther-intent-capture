@@ -6,12 +6,12 @@ Panther separates browser capture and draft review from destination delivery. Th
 
 Choose **Save draft edits**, then **Export JSON** in the review UI. Exports contain the currently saved drafts, source metadata, bounded evidence references, and explicit authority flags. They do not contain screenshot image data, video files, raw event arrays, local filesystem paths, or destination credentials.
 
-The export has `schema_version: "1.1"`. The `schema` value identifies this documented contract. The machine-readable [Draft 2020-12 JSON Schema](../schemas/intent-bundle.schema.json) defines the supported fields, bounds, and fixed review/authority flags. Validation establishes structure, not evidence truth or delivery. This abbreviated synthetic example uses the actual field names:
+The export has `schema_version: "1.2"`. The `schema` value identifies this documented contract. The machine-readable [Draft 2020-12 JSON Schema](../schemas/intent-bundle.schema.json) defines the supported fields, bounds, and fixed review/authority flags. Validation establishes structure, not evidence truth or delivery. This abbreviated synthetic example uses the actual field names:
 
 ```json
 {
   "schema": "https://github.com/hamanakam1/panther-intent-capture#intent-bundle",
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "producer": "panther-intent-capture",
   "exported_at": 1792537200,
   "recording": {
@@ -42,6 +42,7 @@ The export has `schema_version: "1.1"`. The `schema` value identifies this docum
       "evidence": "Three recorded navigation and control events; verify the reported reset.",
       "evidence_refs": [{"kind": "event", "event_index": 1, "type": "change", "timestamp_ms": 1792537101000}],
       "diagnostics": [{"kind": "http_error", "event_index": 3, "message": "A request returned HTTP 500", "source": "https://example.test/api/tickets", "status": 500}],
+      "friction": [{"kind": "repeated_clicks", "title": "Repeated clicks on one control", "detail": "3 clicks on the same control within 10 seconds may indicate an unclear or unresponsive control, or intentional repetition. No failure is verified.", "event_indices": [1, 2, 3], "hypothesis": true}],
       "screenshot_timestamps": [],
       "source_url": "https://example.test/settings",
       "provenance": {
@@ -79,9 +80,11 @@ The `evidence` sentence states the scope the draft was drawn from. When a record
 
 ### Versioning and validation
 
-Consumers should select a schema using `schema_version` and explicitly reject or quarantine unknown versions for review. Version 1.1 has closed object fields: adding a wire field requires a new schema version, even when the new producer considers it optional. Compatible additions use a new minor version; removal, changed meaning, or incompatible types require a new major version. Documentation clarifications that do not change valid payloads do not change the version.
+Consumers should select a schema using `schema_version` and explicitly reject or quarantine unknown versions for review. Version 1.2 has closed object fields: adding a wire field requires a new schema version, even when the new producer considers it optional. Compatible additions use a new minor version; removal, changed meaning, or incompatible types require a new major version. Documentation clarifications that do not change valid payloads do not change the version.
 
-Version 1.1 adds the optional `diagnostics` array on a ticket, the optional `diagnostic_count` on a recording, and the optional `diagnostic_count` in provenance. A 1.1 producer always emits `diagnostics` on every ticket; it is empty when the capture recorded no failure. A consumer that only understands 1.0 must select the 1.0 schema and treat a 1.1 bundle as an unknown version to quarantine for review, exactly as it would for any other unknown version. Migration from 1.0 requires no rewriting of existing payloads: a 1.0 bundle remains a valid 1.0 bundle, and the producer's own version, not the consumer's, decides which contract it was written against.
+Version 1.2 adds the optional `diagnostics` array on a ticket, the optional `diagnostic_count` on the recording, the optional `diagnostic_count` in provenance, and the optional `friction` array on a ticket. A 1.2 producer always emits `diagnostics` and `friction` on every ticket; they are empty when the capture recorded no failure and no friction signal. A consumer that only understands an earlier version must select the schema it understands and treat a 1.2 bundle as an unknown version to quarantine for review, exactly as it would for any other unknown version. Migration requires no rewriting of existing payloads: a 1.0 bundle remains a valid 1.0 bundle, and the producer's own version, not the consumer's, decides which contract it was written against.
+
+`friction` lists the possible-friction hypotheses derived from the recorded actions. Like a failure, a friction signal is a possibility about what happened, not a confirmed defect and not a permission to act. It always carries `hypothesis: true`.
 
 There is no automatic bundle migration or importer in this release. Any future migration must preserve capture/draft identities, provenance, unresolved questions, and the distinction between observations and proposals. It must never turn `execution_authorized` on, remove review requirements, rewrite existing delivery receipts, or silently submit to another system. Keep the original artifact alongside a migrated one.
 
@@ -152,9 +155,14 @@ The backend binds to `127.0.0.1:7890` by default. `/` serves the review UI. API 
 | `GET /export/<id>` | Export the portable JSON bundle. |
 | `GET /automation/<id>` | Inspect automatic job status, stage, counts, retry timing, and delivery receipts; manual captures return `disabled`. |
 | `POST /automation/<id>` | `{ "action": "cancel" }` stops remaining delivery; `{ "action": "retry" }` advances an eligible retry without resetting its budget or expiry. |
+| `GET /integrations` | List every delivery destination with its status. |
 | `GET /integrations/ticket-service` | Check dashboard health-route reachability. |
+| `GET /integrations/github` | Check the GitHub destination's configuration and reachability. |
+| `GET /recordings/<id>/replay` | Read the replay plan for a capture, as JSON or as a Playwright script. |
 | `POST /integrations/ticket-service/preview/<id>` | Build the exact dashboard payload without contacting it. |
+| `POST /integrations/github/preview/<id>` | Build the exact issue payload without contacting GitHub. |
 | `POST /integrations/ticket-service/submit/<id>` | Submit one confirmed, previewed draft and verify it. |
+| `POST /integrations/github/submit/<id>` | Submit one confirmed, previewed draft as an issue and verify it. |
 
 POST and DELETE requests require an `X-Panther-Client` header. JSON POST requests use `Content-Type: application/json`. Browser requests must come from a permitted extension origin or the backend's loopback origin; unrelated website origins are refused. This header is not a secret or authentication token. The API is intended for a single-user local environment.
 
@@ -177,7 +185,17 @@ Manual submit repeats the reviewed body and adds `"confirmed": true` plus the ex
 
 Keep the capture and neutral export schema unchanged. Map a reviewed draft to the target system's supported API, retaining source evidence, the stable capture/draft identity, authority flags, and a durable delivery receipt. Provide a preview, require explicit confirmation, use the target's native idempotency capability, and verify the returned object. Report uncertain delivery rather than silently retrying under a different identity. Make deliberate edits to already delivered items a separate operation.
 
-Remote destinations need their own authentication, data-sharing consent, destination validation, and credential storage design. The built-in dashboard adapter intentionally remains loopback-only; do not relax its host checks to turn it into an arbitrary webhook client.
+A destination implements the same contract the two built-in ones use: a status that never reads another system's data, a canonical target, a preview that never contacts the destination, a confirmed submit that verifies what it created, and a durable receipt keyed by that target. `backend/destinations.py` is the registry; adding a destination means implementing that contract and listing it there. The existing routes, the popup, the review page and the automatic-delivery policy then work with it without further change.
+
+Remote destinations need their own authentication, data-sharing consent, destination validation, and credential storage design. The built-in dashboard adapter intentionally remains loopback-only; do not relax its host checks to turn it into an arbitrary webhook client. The [GitHub destination](GITHUB_DESTINATION.md) is the reference for a remote one: a fixed host, a named repository, a credential that never leaves the adapter, and a destination that is chosen explicitly and frozen for the session.
+
+## The GitHub issues destination
+
+A reviewed draft can be delivered to a named GitHub repository as an issue. It is configured on the backend with `PANTHER_GITHUB_TOKEN` and `PANTHER_GITHUB_REPO` (or the equivalent files under `PANTHER_DATA_DIR`), the API host is fixed to `https://api.github.com`, and the credential never appears in a preview, a receipt, an export or a status report.
+
+The routes mirror the local ticket service's, with the same preview-and-confirm rules: `GET /api/extension/integrations/github`, `POST /api/extension/integrations/github/preview/<id>` and `POST /api/extension/integrations/github/submit/<id>`. `GET /api/extension/integrations` lists every destination with its status.
+
+Each issue carries a stable identity marker, `panther-capture-<recording-id>-<draft-id>`, and the review fence is the text of the body rather than only a label. The same identity is never created twice, and the same identity with different content is a conflict rather than an update. See [the GitHub destination](GITHUB_DESTINATION.md).
 
 ## Verification boundary
 

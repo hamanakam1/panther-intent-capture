@@ -112,7 +112,7 @@ export function liveView(snapshot = {}, state = {}, now = Date.now()) {
   const evidence = values => Array.isArray(values) ? values.filter(value => Number.isSafeInteger(value) && value > 0 && value <= events).slice(0, 12) : [];
   const record = value => value !== null && typeof value === "object" && !Array.isArray(value);
   const recentEvents = hasData && Array.isArray(live.recentEvents) ? live.recentEvents.slice(-12).filter(record).map(event => ({seq: count(event.seq), ts: time(event.ts), label: text(event.label).slice(0, 240) || text(event.type).slice(0, 60) || "Page interaction"})).filter(event => event.seq > 0 && event.seq <= events) : [];
-  const patterns = hasData && Array.isArray(live.patterns) ? live.patterns.slice(0, 4).filter(record).map(pattern => ({title: text(pattern.title).slice(0, 120), detail: text(pattern.detail).slice(0, 300), evidence: evidence(pattern.evidence)})).filter(pattern => pattern.title && pattern.evidence.length) : [];
+  const patterns = hasData && Array.isArray(live.patterns) ? live.patterns.slice(0, 5).filter(record).map(pattern => ({title: text(pattern.title).slice(0, 120), detail: text(pattern.detail).slice(0, 300), evidence: evidence(pattern.evidence)})).filter(pattern => pattern.title && pattern.evidence.length) : [];
   const inferred = hasData ? text(live.inferredIntent) : "";
   return {
     hasData, current, sessionId: hasData ? live.sessionId : "", events, observedAt, recentEvents, patterns,

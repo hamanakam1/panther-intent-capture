@@ -120,6 +120,9 @@ export function sanitizeCaptureEvent(payload, timestamp = Date.now()) {
     }
     if (["button", "a"].includes(target.tag) && target.label) event.target.label = sanitizeText(target.label);
     if (target.href) event.target.href = sanitizeUrl(target.href);
+    // A click on an element the page never marked as a control. Only the
+    // extension's own true flag is kept.
+    if (target.inert === true) event.target.inert = true;
   }
   return event;
 }
