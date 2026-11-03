@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Panther Intent Capture \u2014 local-first architecture",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      700
+    ],
+    "views": [
+      {
+        "id": "capture-path",
+        "label": "Capture path",
+        "focus": [
+          "page",
+          "extension",
+          "backend",
+          "storage"
+        ],
+        "note": "From a consented click to a stored capture, entirely on this computer."
+      },
+      {
+        "id": "delivery-path",
+        "label": "Delivery path",
+        "focus": [
+          "backend",
+          "model",
+          "destination",
+          "person"
+        ],
+        "note": "From a saved capture to a reviewed, verified backlog ticket."
+      }
+    ],
+    "output": "docs/diagrams/panther-architecture.html"
+  },
+  "components": [
+    {
+      "id": "person",
+      "type": "external",
+      "label": "The person",
+      "sublabel": "Consent, review, off",
+      "pos": [
+        40,
+        60
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "page",
+      "type": "external",
+      "label": "Chosen page",
+      "sublabel": "One origin, one tab",
+      "pos": [
+        40,
+        190
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "extension",
+      "type": "frontend",
+      "label": "Panther extension",
+      "sublabel": "Content script, background worker",
+      "pos": [
+        270,
+        125
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "helper",
+      "type": "backend",
+      "label": "Native helper",
+      "sublabel": "On demand; owns the backend",
+      "pos": [
+        540,
+        60
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "backend",
+      "type": "backend",
+      "label": "Panther backend",
+      "sublabel": "Loopback 127.0.0.1:7890",
+      "pos": [
+        540,
+        190
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "storage",
+      "type": "database",
+      "label": "Local storage",
+      "sublabel": "Captures, drafts, receipts",
+      "pos": [
+        800,
+        190
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "model",
+      "type": "cloud",
+      "label": "Local model",
+      "sublabel": "Ollama, loopback only",
+      "pos": [
+        800,
+        320
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "destination",
+      "type": "external",
+      "label": "Ticket service",
+      "sublabel": "Explicit loopback origin",
+      "pos": [
+        540,
+        320
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "review",
+      "type": "external",
+      "label": "Review and confirm",
+      "sublabel": "Never automatic",
+      "pos": [
+        270,
+        320
+      ],
+      "size": [
+        190,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "person-to-extension",
+      "from": "person",
+      "to": "extension",
+      "label": "turn on, consent, stop",
+      "variant": "emphasis"
+    },
+    {
+      "id": "page-to-extension",
+      "from": "page",
+      "to": "extension",
+      "label": "clicks, navigation, metadata"
+    },
+    {
+      "id": "extension-to-helper",
+      "from": "extension",
+      "to": "helper",
+      "label": "start / stop",
+      "variant": "dashed"
+    },
+    {
+      "id": "helper-to-backend",
+      "from": "helper",
+      "to": "backend",
+      "label": "launches and stops"
+    },
+    {
+      "id": "extension-to-backend",
+      "from": "extension",
+      "to": "backend",
+      "label": "events, drafts, export"
+    },
+    {
+      "id": "backend-to-storage",
+      "from": "backend",
+      "to": "storage",
+      "label": "persist"
+    },
+    {
+      "id": "backend-to-model",
+      "from": "backend",
+      "to": "model",
+      "label": "optional inference",
+      "variant": "dashed"
+    },
+    {
+      "id": "backend-to-destination",
+      "from": "backend",
+      "to": "destination",
+      "label": "preview, submit, read back"
+    },
+    {
+      "id": "backend-to-review",
+      "from": "backend",
+      "to": "review",
+      "label": "draft for review"
+    },
+    {
+      "id": "review-to-destination",
+      "from": "review",
+      "to": "destination",
+      "label": "one confirmed draft"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Nothing leaves the machine",
+      "items": [
+        "The extension and the backend talk over loopback only",
+        "The model runs locally; there is no paid or remote fallback",
+        "A destination exists only when one is configured and confirmed"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Authority is explicit",
+      "items": [
+        "Capture starts off and needs consent for the chosen tab",
+        "The native helper starts the backend on demand and stops it on Off",
+        "Delivery is confirmed by a person and verified by reading the ticket back"
+      ]
+    }
+  ]
+}
