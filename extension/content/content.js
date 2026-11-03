@@ -9,6 +9,8 @@
   let routeTimer = null;
   let statusTimer = null;
   let panel = null;
+  // Where the keyboard was before the panel appeared, so hiding it can put it back.
+  let focusBeforePanel = null;
   let statusText, detailsText, stopButton, reviewButton;
 
   // Page-failure channels. These mirror the extension's shared allowlist and
@@ -221,6 +223,13 @@
     panel = null;
     clearInterval(statusTimer);
     statusTimer = null;
+    // Give the keyboard back to where it was before the panel appeared.
+    const target = focusBeforePanel;
+    focusBeforePanel = null;
+    if (target && target.isConnected !== false && typeof target.focus === "function") {
+      try { target.focus({ preventScroll: true }); }
+      catch { /* The page may have replaced that element in the meantime. */ }
+    }
   }
 
   function renderStatus(state) {
@@ -248,22 +257,32 @@
   }
 
   function showPanel() {
+    // Remember where the keyboard was, so hiding the panel can put it back.
+    const active = document.activeElement;
     hidePanel();
+    focusBeforePanel = active && active !== document.body && typeof active.focus === "function" ? active : null;
     panel = document.createElement("div");
     panel.id = "panther-intent-capture-controls";
     panel.style.cssText = "all:initial!important;position:fixed!important;bottom:18px!important;right:18px!important;z-index:2147483647!important;display:block!important;";
     const shadow = panel.attachShadow({ mode: "closed" });
     const style = document.createElement("style");
-    style.textContent = ".box{box-sizing:border-box;width:270px;padding:14px;background:#111827;color:#f9fafb;border:1px solid #475569;border-radius:12px;box-shadow:0 8px 30px #0005;font:13px/1.4 system-ui}strong{display:block;font-size:14px}p{margin:7px 0 10px;color:#cbd5e1;overflow-wrap:anywhere}nav{display:flex;gap:6px;flex-wrap:wrap}button{font:600 12px system-ui;padding:7px 9px;border-radius:6px;border:1px solid #64748b;background:#334155;color:white;cursor:pointer}button[hidden]{display:none}button:disabled{opacity:.5}.stop{background:#b91c1c;border-color:#f87171}.hide{margin-left:auto}";
+    style.textContent = ".box{box-sizing:border-box;width:270px;padding:14px;background:#111827;color:#f9fafb;border:1px solid #475569;border-radius:12px;box-shadow:0 8px 30px #0005;font:13px/1.4 system-ui}strong{display:block;font-size:14px}p{margin:7px 0 10px;color:#cbd5e1;overflow-wrap:anywhere}.controls{display:flex;gap:6px;flex-wrap:wrap}button{font:600 12px system-ui;padding:7px 9px;border-radius:6px;border:1px solid #64748b;background:#334155;color:white;cursor:pointer}button[hidden]{display:none}button:disabled{opacity:.5}.stop{background:#b91c1c;border-color:#f87171}.hide{margin-left:auto}button:focus-visible{outline:2px solid #93c5fd;outline-offset:2px}@media (forced-colors: active){.box{background:Canvas;color:CanvasText;border:1px solid CanvasText}p{color:CanvasText}button{background:ButtonFace;color:ButtonText;border:1px solid ButtonText}button:focus-visible{outline:2px solid Highlight}}";
     const box = document.createElement("section");
     box.className = "box";
+    box.setAttribute("role", "region");
     box.setAttribute("aria-label", "Panther capture controls");
     statusText = document.createElement("strong");
     statusText.setAttribute("role", "status");
-    statusText.textContent = "Panther · Capturing";
+    statusText.setAttribute("aria-live", "polite");
+    // A live region announces a change that happens after it exists, so the
+    // status line starts empty and is filled once the region is in the page.
+    statusText.textContent = "";
     detailsText = document.createElement("p");
     detailsText.textContent = "0 events · this tab only";
-    const controls = document.createElement("nav");
+    const controls = document.createElement("div");
+    controls.className = "controls";
+    controls.setAttribute("role", "group");
+    controls.setAttribute("aria-label", "Capture actions");
     stopButton = document.createElement("button");
     stopButton.type = "button"; stopButton.className = "stop"; stopButton.textContent = "Stop & generate";
     stopButton.addEventListener("click", async () => {
@@ -285,7 +304,20 @@
     controls.append(stopButton, reviewButton, hide);
     box.append(statusText, detailsText, controls);
     shadow.append(style, box);
+    // Escape closes the panel while the keyboard is inside it. Focus is not
+    // trapped: the panel lives on someone else's page, and a keyboard user
+    // must still be able to reach the content they are capturing.
+    shadow.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      hidePanel();
+    });
     document.documentElement.appendChild(panel);
+    // Fill the status line once the region is in the document, so assistive
+    // technology announces the state instead of only displaying it.
+    setTimeout(() => {
+      if (statusText && !statusText.textContent) statusText.textContent = "Panther · Capturing";
+    }, 0);
     statusTimer = setInterval(refreshStatus, 1000);
   }
 

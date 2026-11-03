@@ -4,7 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Stacked pull requests target a feature branch rather than main. They
+    # need the same checks, or a change can sit in a stack without ever being
+    # tested.
+    branches: [main, "fix/**", "feature/**"]
 
 jobs:
   test:
