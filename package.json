@@ -1,0 +1,12 @@
+{
+  "name": "panther-intent-capture",
+  "private": true,
+  "type": "module",
+  "description": "Browser-qualification tooling for Panther Intent Capture. The extension and the backend themselves carry no runtime dependencies.",
+  "scripts": {
+    "qualify:browser": "node scripts/qualify_browser.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.64.1"
+  }
+}

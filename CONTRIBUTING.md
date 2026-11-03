@@ -45,6 +45,18 @@ python3 -B -m unittest discover -s tests -p 'test_*.py' -v
 python3 scripts/package_extension.py
 ```
 
+### Loaded-browser qualification
+
+The synthetic suites cannot show that the unpacked extension loads in a real browser or that a consented capture reaches the local backend. `scripts/qualify_browser.mjs` does that on a real Chromium, in an isolated profile, against a synthetic loopback page:
+
+```bash
+npm install
+npx playwright-core install chromium
+node scripts/qualify_browser.mjs --report browser-qualification.md
+```
+
+It needs the backend port `127.0.0.1:7890` free, and it fails loudly rather than quietly. It registers Panther's native helper inside a temporary browser profile, so no personal registration, helper file or capture directory is touched. See [loaded-browser qualification](docs/BROWSER_QUALIFICATION.md) for what it checks and what it does not prove.
+
 ## Code style
 
 - JavaScript: ES modules, `import`/`export`, no `var`

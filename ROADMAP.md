@@ -38,7 +38,7 @@ The [1.2.0 verification report](docs/AUTOMATION_TEST_RESULTS.md) separately reco
 
 ## Next: qualify the complete user workflow
 
-- Exercise the unpacked extension in fresh Chrome and Edge profiles, including same-origin reloads, SPA routes, tab changes, service-worker suspension, and browser restart.
+- Exercise the unpacked extension in fresh Chrome and Edge profiles, including same-origin reloads, SPA routes, tab changes, service-worker suspension, and browser restart. The consented path now runs automatically in a real Chromium through the [loaded-browser qualification](docs/BROWSER_QUALIFICATION.md); the remaining manual work is a headed Chrome and Edge profile, service-worker suspension, and browser restart.
 - Verify the toolbar popup, persistent status window, and floating panel remain usable with long text, zoom, keyboard navigation, screen readers, and narrow windows.
 - Run consented local ticket service captures and verify useful, edited tickets from preview through live readback without allowing autonomous execution.
 - Measure draft usefulness with representative examples: accurate evidence, clear expected behavior, useful acceptance criteria, and minimal manual correction.
