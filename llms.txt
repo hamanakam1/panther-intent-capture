@@ -1,0 +1,67 @@
+# panther-intent-capture llms.txt
+
+## Project Overview
+Panther Intent Capture is a browser-controlled tool that turns a user's observed workflow into a clear, reviewable request for improvement. It records interactions (clicks, control changes, submissions, navigation) from a chosen tab, keeps evidence locally, and generates structured JSON intent bundles that can be exported or delivered to a local ticket service.
+
+**Key design principles:**
+- Capture requires an explicit user start on a chosen page
+- Evidence and inference must be distinguishable
+- Failures remain visible as observations, not verified defects
+- Delivery requires manual review confirmation or a bounded session opt-in
+- Panther captures intent and creates tickets; it does not implement the work
+
+## Capabilities
+- **Chosen-tab capture** (Chrome/Edge 116+): Records clicks, changes, submissions, and navigation within the selected tab's origin. Typed values, typed keys, and full page text are excluded.
+- **Page-reported failures**: Records uncaught exceptions, unhandled promise rejections, HTTP error responses, and failed subresources as observations.
+- **Friction hypotheses**: Derives possibilities from recorded actions (repeated clicks on one control, A→B→A navigation patterns).
+- **Replay plans**: Exports a versioned, destination-neutral plan of the path taken, with stable handles for each control, recorded failures, and friction signals.
+- **Evidence drafts**: Stops capture and prepares a draft from observed actions and the user's stated goal, without model inference.
+- **Optional local AI**: Explicitly choose "Generate with local AI" for proposed intents and task decomposition using a configured local Ollama model. No paid or remote inference fallback.
+- **Human review**: Inspect events and screenshots, edit title/description/acceptance criteria, and save draft edits locally.
+- **Local ticket delivery**: Preview the exact ticket, then confirm one draft at a time. Creates backlog tickets with `no-auto` review fence.
+- **Opt-in end-to-end automation**: Configure a compatible destination, enable "Automatically deliver tickets this session," and watch saving, generation, delivery, and independent verification run automatically.
+- **Portable JSON export**: Export the same draft and provenance for another tool. Additional destinations need an adapter or importer.
+
+## Privacy & Redaction
+- **URL sanitization**: Removes credentials and query parameters from captured URLs. Session identifiers in URL paths are treated as secret.
+- **Text sanitization**: Removes common secret patterns (API keys, tokens, passwords, email addresses) from captured text fields.
+- **Event redaction**: The backend re-redacts whatever a client posts, providing defense-in-depth. The extension and backend redact identically.
+- **Label-only target metadata**: The extension sends accessible names as "label" only; "text" from page elements is never sent or stored.
+- **Screenshot consent**: Separately consented; up to 5 screenshots per session. Pixels are not redacted. Inspect before sharing.
+- **30-day retention**: Backend captures have a 30-day retention limit and a cap of 200 records.
+
+## Local AI Integration
+- **Configuration**: Set `OLLAMA_ENDPOINT` (loopback HTTP address, e.g., `http://127.0.0.1:11434/v1`) and `OLLAMA_MODEL` (must already be installed on the computer).
+- **Live insights**: During an active capture, explicitly select "Live local AI insights" in the status window. The model interprets bounded observations (at most 12 numbered observations) at most once every 15 seconds.
+- **Draft generation**: After Stop, choose "Generate with local AI" for proposed intents and task decomposition. Model output is untrusted proposed interpretation, not a verified bug or outcome.
+- **Execution authority**: Local AI responses never carry `execution_authorized: true`. The `execution_authorized: false` flag is always preserved.
+- **Model errors**: Unavailable model, slow response, malformed output, or busy local service is shown as unavailable; observed-action feed continues working.
+
+## Delivery & Destinations
+- **No default ticket destination**: Configure a loopback origin with `--dashboard-url` during helper setup, or set `PANTHER_DASHBOARD_URL` for a manually launched backend.
+- **Local ticket service**: The built-in adapter supports a specific protocol at `GET /health`, `POST /record`, `GET /recordings`, etc. Paths, query strings, credentials, non-loopback hosts, and redirects are rejected.
+- **GitHub issues destination**: Configure with `PANTHER_GITHUB_TOKEN` and `PANTHER_GITHUB_REPO`. The API host is fixed to `https://api.github.com`. Each issue carries a stable identity marker `panther-capture-<recording-id>-<draft-id>`.
+- **Remote destinations**: Need their own authentication, data-sharing consent, destination validation, and credential storage design. The built-in dashboard adapter intentionally remains loopback-only.
+- **Delivery contract**: Preview requires explicit confirmation. Submitted tickets enter backlog with `no-auto` fence. Receipts retain capture identity, content hash, target, ticket ID, and delivery state to prevent duplicate submissions.
+
+## Known Limitations
+- Video and audio capture are disabled in this release
+- Firefox and Safari builds are experimental placeholders, not supported browser builds
+- Native desktop capture and operating-system integrations are not implemented (Windows helper packaging remains unimplemented)
+- Streaming inference, session comparison, heatmaps, and DOM reconstruction are not available
+- Automatic coding-agent execution is not permitted; captured workflows never grant permission to run code, change a service, or publish work
+- Chrome 156 in this environment cannot load loopback URLs; the capture script probes each candidate browser for HTTP reachability before using it
+- This environment uses synthetic origins (`http://127.0.0.1:8080`) and placeholder extension IDs (`<your-extension-id>`) for privacy
+
+## Development & Verification
+- **Backend**: Python 3.11+, standard library only. `python3 backend/server.py` starts a manual server at `http://127.0.0.1:7890/`.
+- **Tests**: 182 Python unit tests + 236 JavaScript unit tests. Run with:
+  - `python3 -B -m unittest discover -s tests -p 'test_*.py'`
+  - `node --test tests/*.mjs`
+- **JSON Schema validation**: Requires `jsonschema==4.26.0` for full export-schema validation. CI installs it explicitly.
+- **Packaging**: `python3 scripts/package_extension.py` builds a Chromium ZIP artifact.
+- **Data directory**: `PANTHER_DATA_DIR` (~/.panther-intent-capture by default) stores captures, drafts, and receipts.
+
+## Contact & Maintainer
+- Repository: https://github.com/hamanakam1/panther-intent-capture
+- License: MIT

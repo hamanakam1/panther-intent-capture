@@ -4,16 +4,16 @@
 <title>Panther · Capture review</title><link rel="stylesheet" href="options.css"></head>
 <body>
 <main class="shell">
-<header><div><p class="eyebrow">PANTHER INTENT CAPTURE</p><h1>From activity to a clear next step.</h1></div><button id="refresh">Refresh</button></header>
+<header><div><p class="eyebrow">PANTHER INTENT CAPTURE</p><h1 aria-label="Page title">From activity to a clear next step.</h1></div><button id="refresh">Refresh</button></header>
 <section class="status-bar" aria-label="System status">
 <div><span class="dot" id="backendDot"></span><strong id="backendStatus">Connecting to local backend…</strong></div>
 <div><label for="deliveryDestination" class="muted">Delivery destination</label> <select id="deliveryDestination"></select> <span id="dashboardStatus">Checking ticket-service configuration…</span></div>
 </section>
 <p id="message" role="status" aria-live="polite">Loading captures…</p>
 <div class="workspace">
-<section class="card library"><h2>Captures <span id="count">0</span></h2><p class="muted">Start from the extension on any supported web page. Evidence drafts are prepared automatically when you stop.</p><div id="recordings"></div></section>
+<section class="card library"><h2 aria-label="Captures list">Captures <span id="count">0</span></h2><p class="muted">Start from the extension on any supported web page. Evidence drafts are prepared automatically when you stop.</p><div id="recordings"></div></section>
 <section class="card review" id="review">
-<div id="emptyReview"><h2>Your captures and deliveries.</h2><p>Choose a capture to follow automatic delivery, inspect observed steps, or review and send drafts manually.</p><p class="muted">Automatic delivery requires a separate opt-in before capture. Generated suggestions still require judgment; ordinary navigation does not prove a bug.</p></div>
+<div id="emptyReview"><h2 aria-label="Captures and deliveries">Your captures and deliveries.</h2><p>Choose a capture to follow automatic delivery, inspect observed steps, or review and send drafts manually.</p><p class="muted">Automatic delivery requires a separate opt-in before capture. Generated suggestions still require judgment; ordinary navigation does not prove a bug.</p></div>
 <div id="captureView" hidden>
 <div class="section-heading"><h2 id="captureTitle"></h2><button id="deleteCapture" class="danger">Delete capture</button></div>
 <p id="captureMeta" class="muted"></p><p id="captureGoal"></p>
